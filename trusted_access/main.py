@@ -94,6 +94,11 @@ def current_user(
     return {"user_id": row["id"], "email": row["email"]}
 
 
+from trusted_access.vault import register_routes as register_vault_routes
+
+register_vault_routes(app)
+
+
 @app.get("/health", tags=["system"])
 def health() -> dict[str, str]:
     return {"status": "ok"}
