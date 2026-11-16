@@ -46,4 +46,11 @@ pytest
 uvicorn trusted_access.main:app --reload
 ```
 
-The health endpoint is available at `http://127.0.0.1:8000/health`.
+Open `http://127.0.0.1:8000/` for the browser dashboard. The interactive API
+documentation remains available at `http://127.0.0.1:8000/docs`, and the health
+endpoint is available at `http://127.0.0.1:8000/health`.
+
+The browser dashboard is a prototype interface. It encrypts vault text in the
+browser before submission, but its demonstration key is kept in browser
+storage; do not use real-life secrets until the key-management and recovery
+design has received a professional security review.

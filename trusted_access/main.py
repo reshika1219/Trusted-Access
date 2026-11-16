@@ -3,7 +3,6 @@ import os
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
-from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from trusted_access.auth import (
@@ -26,11 +25,6 @@ app = FastAPI(
 app.state.database_path = Path(
     os.environ.get("TRUSTED_ACCESS_DB", ".data/trusted_access.sqlite3")
 )
-
-
-@app.get("/", include_in_schema=False)
-def home() -> RedirectResponse:
-    return RedirectResponse(url="/docs")
 
 
 def database():
@@ -119,6 +113,10 @@ register_access_routes(app)
 from trusted_access.backup import register_routes as register_backup_routes
 
 register_backup_routes(app)
+
+from trusted_access.ui import register_ui
+
+register_ui(app)
 
 
 @app.get("/health", tags=["system"])
