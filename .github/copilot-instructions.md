@@ -31,8 +31,8 @@ estate planning, or legally certified emergency-release system.
 - Do not claim production security until a professional security review has
   occurred.
 - Make one coherent change at a time and create a Git commit immediately after
-  validating it. Use a descriptive commit message and include the required
-  Copilot co-author trailer.
+  validating it. Use a descriptive commit message authored only by the user;
+  never add a co-author trailer or any other assistant attribution.
 - Never amend or rewrite commits unless the user explicitly asks.
 
 ## Documentation
