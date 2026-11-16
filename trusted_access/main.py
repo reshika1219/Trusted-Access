@@ -106,6 +106,10 @@ from trusted_access.requests import register_routes as register_request_routes
 
 register_request_routes(app)
 
+from trusted_access.access import register_routes as register_access_routes
+
+register_access_routes(app)
+
 
 @app.get("/health", tags=["system"])
 def health() -> dict[str, str]:
