@@ -98,6 +98,10 @@ from trusted_access.vault import register_routes as register_vault_routes
 
 register_vault_routes(app)
 
+from trusted_access.contacts import register_routes as register_contact_routes
+
+register_contact_routes(app)
+
 
 @app.get("/health", tags=["system"])
 def health() -> dict[str, str]:
