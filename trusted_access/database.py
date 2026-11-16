@@ -14,6 +14,13 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS trusted_contacts (
     id TEXT PRIMARY KEY,
     owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
