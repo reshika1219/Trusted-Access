@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import secrets
 from sqlite3 import Connection
+from datetime import timedelta
 from typing import Optional
 from uuid import uuid4
 
@@ -57,6 +60,35 @@ def register_routes(app) -> None:
         record_audit(connection, owner_id, "trusted_contact_created", contact_id, owner_id)
         connection.commit()
         return {"contact_id": contact_id}
+
+    @app.post("/trusted-contacts/{contact_id}/invite", tags=["contacts"])
+    def create_contact_invite(
+        contact_id: str,
+        auth: tuple[str, Connection] = Depends(context),
+    ) -> dict[str, str]:
+        owner_id, connection = auth
+        contact = connection.execute(
+            "SELECT id FROM trusted_contacts WHERE id = ? AND owner_id = ?",
+            (contact_id, owner_id),
+        ).fetchone()
+        if contact is None:
+            raise HTTPException(status_code=404, detail="Trusted contact not found")
+        raw_token = secrets.token_urlsafe(32)
+        connection.execute(
+            """
+            INSERT INTO contact_sessions (token_hash, contact_id, created_at, expires_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                hashlib.sha256(raw_token.encode("utf-8")).hexdigest(),
+                contact_id,
+                utc_now().isoformat(),
+                (utc_now() + timedelta(days=7)).isoformat(),
+            ),
+        )
+        record_audit(connection, owner_id, "trusted_contact_invited", contact_id, owner_id)
+        connection.commit()
+        return {"contact_token": raw_token}
 
     @app.get("/trusted-contacts", tags=["contacts"])
     def list_contacts(
