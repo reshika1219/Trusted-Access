@@ -20,6 +20,10 @@ This first change establishes the project contract and research baseline.
 8. Add development notifications, recovery UX, threat-model review, and
    security testing.
 
+The current implementation has reached the recovery/export contract. The
+server deliberately does not decrypt imported backup payloads or promise key
+recovery; client-side decryption and validation remain required.
+
 ## First vertical slice
 
 The first slice should demonstrate this complete path:
