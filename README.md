@@ -16,8 +16,9 @@ is a small vertical slice with local development authentication, encrypted text
 vault records, trusted contacts, per-item permissions, owner-approved temporary
 read-only access, and owner-visible audit events.
 
-The stack is intentionally not selected yet. It is a security-critical decision
-that should be confirmed before implementation.
+The initial stack is Python, FastAPI, and SQLite. Vault encryption is intended
+to happen client-side; the server must persist ciphertext rather than plaintext.
+File attachments are deferred until text records and permissions are validated.
 
 ## Principles
 
@@ -35,5 +36,14 @@ that should be confirmed before implementation.
 
 ## Development
 
-Setup and test commands will be documented after the language, framework, and
-database are selected.
+Create a virtual environment and install the project with test dependencies:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[test]"
+pytest
+uvicorn trusted_access.main:app --reload
+```
+
+The health endpoint is available at `http://127.0.0.1:8000/health`.

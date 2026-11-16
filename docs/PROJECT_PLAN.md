@@ -33,6 +33,12 @@ The first slice should demonstrate this complete path:
 7. The recipient views only that item.
 8. The owner can see the request, approval, grant, view, and expiry events.
 
+## Confirmed decisions
+
+- Python with FastAPI and SQLite
+- Client-side encryption; the server stores ciphertext only
+- File attachments are deferred until text records and permissions work
+
 ## Decisions requiring confirmation
 
 - Backend language and web framework
