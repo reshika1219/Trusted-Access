@@ -93,11 +93,43 @@ Known limits:
 - Invite links carry the contact token in the URL fragment, which browsers do
   not send to the server. The page removes it from the address bar on load.
 
+## Key delivery
+
+Contacts read shared items through end-to-end encryption, not through the
+server:
+
+- Each contact's browser generates an RSA-OAEP (3072-bit, SHA-256) keypair with a
+  non-extractable private key kept in IndexedDB. Only the public key is sent.
+- The owner confirms the key by comparing its SHA-256 fingerprint out of band,
+  and the server verifies that the key being confirmed is the one it holds. A
+  replaced key loses confirmation, and wrapped keys for the old key are
+  deleted. Publishing to an unconfirmed key is refused.
+- For each share, the owner's browser encrypts the item under a fresh random
+  AES-256-GCM key and wraps it to each confirmed contact with RSA-OAEP. The
+  server stores only ciphertext and wrapped keys and releases them to a contact
+  only while one of their grants is active.
+- Editing an item, changing its rules, or stopping sharing deletes the stored
+  copy so stale content or keys are never served.
+
+What this does not protect against:
+
+- An owner who confirms a fingerprint without comparing it. A malicious server
+  could then substitute its own key and decrypt what is delivered. Compare
+  fingerprints over a channel the server does not control.
+- A stolen invite token. An attacker can register their own key, but delivery
+  needs the owner's confirmation, which will not match the real contact.
+- A contact who already opened an item. Revocation and key rotation cannot
+  erase what they saw or copied.
+- A compromised contact browser, which holds the contact's private key.
+- Loss of a contact's browser key. The contact creates a new one and the owner
+  re-confirms.
+
 ## Known gaps
 
-- Decryption keys are not shared between people, so a contact reads plaintext
-  only in a browser that holds the owner's key.
-- No recovery key, email verification, password reset, or two-factor sign-in.
+- No owner recovery key (the vault key lives in the owner's browser), and no
+  email verification, password reset, or two-factor sign-in.
+- Server-side metadata (titles, categories, contact details, the access graph)
+  is not hidden from the server.
 - Policy access modes are recorded but not yet enforced differently, and grants
   always last one hour.
 - The SQLite database is not encrypted at rest.

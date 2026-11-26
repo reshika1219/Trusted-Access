@@ -31,9 +31,12 @@ zero-knowledge or client-side-encryption deployment model.
 - `requests.py`: contact-authenticated access requests
 - `access.py`: approvals, grants, revocation, audit listing
 - `portal.py`: read-only views for a signed-in trusted contact
+- `keys.py`: contact public keys, owner fingerprint confirmation, and the
+  encrypted shares and wrapped keys that implement key delivery
 - `backup.py`: export contract and import audit notice
 - `ui.py`: the single-page dashboard and its Content-Security-Policy
-- `database.py`: SQLite schema (foreign-key cascades end access on deletes)
+- `database.py`: SQLite schema and migrations (foreign-key cascades end access
+  on deletes)
 
 Owner and contact credentials are separate (`X-Session-Token` and
 `X-Contact-Token`), so a contact token can never act as an owner session.

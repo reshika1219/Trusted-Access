@@ -30,9 +30,13 @@ explicit approval workflows.
 
 **For a trusted contact** (the "I'm a trusted contact" link, or an invite link):
 
+- Your browser creates an encryption key the first time you sign in. You read
+  its fingerprint to the owner, who confirms it.
 - See only the items an owner shared with you (never ciphertext in listings).
 - Request access, approve other contacts' requests when you are an approver
-  (you can never approve your own), and view an item while your grant is active.
+  (you can never approve your own), and open an item while your grant is active.
+  It decrypts in your browser with a key the owner delivered in advance, so it
+  works even when the owner is offline.
 
 ## Quick start
 
@@ -53,12 +57,34 @@ in the demo. It opens a second tab as that contact.
 
 ## How a request flows
 
-1. The owner shares an item with contacts (a policy: contacts + approvals).
-2. A contact asks for it. Nothing is released yet.
-3. The owner approves (or, for multi-approval items, other contacts approve).
-4. A read-only grant is created that expires after one hour.
-5. The contact views the item. Every step is written to the owner's audit log.
-6. The owner can revoke the grant, stop sharing, or delete the item at any time.
+1. A contact signs in with their invite. Their browser creates a keypair and
+   registers the public key. They read the fingerprint to the owner.
+2. The owner compares fingerprints and confirms the key.
+3. The owner shares an item with contacts (a policy: contacts + approvals). The
+   owner's browser delivers a copy of the item that only the confirmed contacts'
+   keys can open.
+4. A contact asks for the item. Nothing is released yet.
+5. The owner approves (or, for multi-approval items, other contacts approve).
+   A read-only grant is created that expires after one hour.
+6. While the grant is active the server hands the contact the encrypted copy
+   and their wrapped key. The contact decrypts it in their browser.
+7. Every step is written to the owner's audit log. The owner can revoke the
+   grant, stop sharing, or delete the item at any time.
+
+## Key delivery
+
+The server never sees a decryption key:
+
+- Each contact's browser generates an RSA-OAEP (3072-bit) keypair. The private
+  key is non-extractable and stays in the browser (IndexedDB).
+- The owner confirms the contact's key by fingerprint, out of band. A key that
+  changes later loses confirmation and any keys wrapped to it.
+- When sharing, the owner's browser encrypts a copy of the item under a fresh
+  random AES-256-GCM key and wraps that key to each confirmed contact with
+  RSA-OAEP. Every publish uses a new key.
+- The server stores the encrypted copy and the wrapped keys and releases them
+  only while a grant is active. Editing an item or changing its sharing rules
+  clears the old copy, and the owner's browser publishes a fresh one.
 
 ## API overview
 
@@ -70,6 +96,7 @@ in the demo. It opens a second tab as that contact.
 | Contacts | `POST/GET /trusted-contacts`, `DELETE /trusted-contacts/{id}`, `POST .../invite` |
 | Requests | `POST /access-requests` (contact), `GET /access-requests` (owner), `.../approve`, `.../reject`, `.../contact-approve` |
 | Grants | `GET /access-grants`, `GET /access-grants/{id}` (contact), `POST .../revoke` |
+| Key delivery | `PUT /contact/key`, `POST /trusted-contacts/{id}/key/confirm`, `PUT /vault/items/{id}/share`, `GET /vault/policies` |
 | Contact portal | `GET /contact/me`, `/contact/items`, `/contact/requests`, `POST /contact/logout` |
 | Audit / backup | `GET /audit-events`, `GET /backup/export`, `POST /backup/import` |
 
@@ -97,11 +124,18 @@ See the [threat model](docs/THREAT_MODEL.md) for scope and known limits.
 
 These are deliberate prototype boundaries, not oversights:
 
-- **Keys are not shared between people.** The vault key lives in the owner's
-  browser (`localStorage`). A contact only sees plaintext in a browser that
-  holds the same key (for example, the demo). Real key delivery (per-item keys,
-  secret sharing among contacts) is an open design decision.
-- **No recovery key.** Lose the browser key and encrypted items are gone.
+- **Contact keys live in one browser.** A contact who loses it (or switches
+  browser) must create a new key, and the owner must confirm it again. Items are
+  delivered to contacts only after the owner has confirmed their key, so a
+  contact who never set one up cannot read anything.
+- **Fingerprint checking is manual.** If an owner confirms without comparing, a
+  malicious server could substitute a key. This is the usual trade-off of
+  end-to-end encryption without a trusted directory.
+- **Something a contact already opened can't be taken back.** Revoking stops
+  future access and rotates keys, but cannot erase what they saw.
+- **No recovery key for the owner.** The owner's vault key lives in their
+  browser (`localStorage`). Lose it and the owner's own encrypted items are
+  gone. Shared copies already delivered to contacts remain readable by them.
 - The server database is not encrypted at rest, and titles, categories and
   contact details are stored in plaintext on the server.
 - Policy `access_mode` (specific contacts / emergency only / time limited) is

@@ -20,15 +20,16 @@ tested (see the README for features). Status against the minimal order:
    partially done. There are no notifications and no recovery key. The threat
    model is current but has not had a professional review.
 
-A browser dashboard covers the owner and trusted-contact workflows.
+A browser dashboard covers the owner and trusted-contact workflows. Key
+delivery to contacts is implemented (RSA-OAEP wrapped per-share keys with owner
+fingerprint confirmation), so contacts can decrypt shared items in their own
+browser while the owner is offline.
 
 ## Next steps
 
-1. **Decide key delivery.** Contacts cannot decrypt in a different browser.
-   Options include per-item keys wrapped for each contact, or secret sharing
-   (Shamir) across contacts. This changes the threat model, so it should be a
-   deliberate decision.
-2. Add a recovery key and a recovery flow for the browser key.
+1. Add an owner recovery key and a recovery flow for the browser vault key.
+2. Strengthen contact key setup: a second device per contact, and an easier
+   way to compare fingerprints (for example a short code read aloud).
 3. Make `access_mode` real: waiting periods, time-limited windows, and
    configurable grant lifetime.
 4. Development notifications (for example, email to a local sink).
@@ -56,7 +57,6 @@ The first slice should demonstrate this complete path:
 
 ## Decisions still requiring confirmation
 
-- How decryption keys reach trusted contacts (see next steps)
 - Recovery-key UX
 - Notification mechanism for development
 - Deployment model beyond a local prototype
