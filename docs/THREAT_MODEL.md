@@ -45,3 +45,29 @@ The product must not continuously track devices, monitor users, read private
 messages, or use AI to observe a person's life. Automatic release must never be
 presented as legally valid or enabled without explicit configuration, warnings,
 waiting-period semantics, and audit events.
+
+## Backups
+
+The dashboard downloads an encrypted backup (format version 2). The whole
+payload, including titles, categories, and trusted contacts, is encrypted in
+the browser with AES-256-GCM using a key derived from a user-chosen passphrase
+(PBKDF2-SHA256, 600,000 iterations, random salt and IV per export). The file
+header is bound as authenticated data. The server never receives the
+passphrase or the plaintext backup, and import only sends it the ciphertext for
+the audit trail.
+
+Known limits:
+
+- The server still stores titles, categories, and contacts as plaintext and
+  returns them to the owner at export time. Only the downloaded file is fully
+  encrypted.
+- Passphrase strength is the user's responsibility; only a 12-character minimum
+  is enforced. PBKDF2 is not memory-hard (the Web Crypto API has no Argon2).
+- Lost passphrases cannot be recovered by the server.
+- Backups do not contain the browser-held vault encryption key or sharing
+  policies. Restored items are private and decrypt only in a browser that holds
+  the original key.
+- Older unencrypted (version 1) backups can still be imported, with a warning.
+- Imported files are untrusted: headers, KDF cost, record shapes, sizes, and
+  counts are validated, and restored records are created through the normal
+  authorised APIs.

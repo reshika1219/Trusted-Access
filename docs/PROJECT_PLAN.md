@@ -22,7 +22,10 @@ This first change establishes the project contract and research baseline.
 
 The current implementation has reached the recovery/export contract. The
 server deliberately does not decrypt imported backup payloads or promise key
-recovery; client-side decryption and validation remain required.
+recovery; client-side decryption and validation remain required. The dashboard
+now encrypts the entire backup file in the browser with a user-chosen
+passphrase (see the backup section of the threat model) and validates files
+before restoring them.
 
 ## First vertical slice
 
