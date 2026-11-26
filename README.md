@@ -153,6 +153,6 @@ These are deliberate prototype boundaries, not oversights:
 ## Development
 
 `python -m pytest` runs the test suite (it also syntax-checks the dashboard's
-embedded JavaScript when Node.js is installed). CI runs it on Python 3.9 and
-3.12. Contributions should follow `.github/copilot-instructions.md`: small
+embedded JavaScript when Node.js is installed). It supports Python 3.9 and
+newer. Contributions should follow `.github/copilot-instructions.md`: small
 vertical slices, tests for authorization, expiry, approvals, and audit events.
