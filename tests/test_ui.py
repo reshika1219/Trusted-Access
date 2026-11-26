@@ -44,3 +44,12 @@ def test_dashboard_offers_demo_login_without_builtin_credentials(tmp_path) -> No
     assert "Try the demo" in html
     assert "crypto.getRandomValues" in html
     assert "@demo.example" in html
+
+
+def test_dashboard_offers_revoke_access_for_active_grants(tmp_path) -> None:
+    app.state.database_path = tmp_path / "ui.sqlite3"
+    html = TestClient(app).get("/").text
+
+    assert "Revoke access" in html
+    assert 'api("/access-grants")' in html
+    assert '"/access-grants/" + d.revoke + "/revoke"' in html

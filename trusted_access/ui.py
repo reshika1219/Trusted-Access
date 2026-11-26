@@ -260,7 +260,7 @@ INDEX_HTML = r"""<!doctype html>
 
 <script>
 const $ = (id) => document.getElementById(id);
-const state = { token: sessionStorage.getItem("trustedAccessToken"), items: [], contacts: [], requests: [] };
+const state = { token: sessionStorage.getItem("trustedAccessToken"), items: [], contacts: [], requests: [], grants: [] };
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const LABELS = {
   trusted_contact_created: "Trusted contact added", access_policy_changed: "Sharing rules changed", vault_item_created: "Vault item saved",
@@ -351,9 +351,17 @@ function render() {
     || empty("No trusted contacts yet", "Add someone you'd trust in an emergency.");
   const itemName = (id) => (state.items.find(i => i.id === id) || {}).title || "Unknown item";
   const contactName = (id) => (state.contacts.find(c => c.id === id) || {}).name || "A trusted contact";
-  $("requests").innerHTML = state.requests.map(r => `<li class="item"><div class="main"><div class="title">${esc(contactName(r.requester_contact_id))} requested “${esc(itemName(r.vault_item_id))}”</div>
-    <div class="muted"><span class="pill ${esc(r.status)}">${esc(r.status.replace("_", " "))}</span> · ${when(r.requested_at)}</div></div>
-    ${["pending", "owner_approved"].includes(r.status) ? `<div class="actions">${r.status === "pending" ? `<button class="btn small" data-approve="${esc(r.id)}" type="button">Approve</button>` : ""}<button class="btn danger ghost small" data-reject="${esc(r.id)}" type="button">Reject</button></div>` : ""}</li>`).join("")
+  const grantOf = (r) => state.grants.find(g => g.request_id === r.id && !g.revoked_at) || state.grants.find(g => g.request_id === r.id);
+  const grantState = (g) => !g ? null : g.revoked_at ? "revoked" : (parseDate(g.expires_at) <= new Date() ? "expired" : "active");
+  $("requests").innerHTML = state.requests.map(r => {
+    const g = grantOf(r), gs = grantState(g), shown = gs === "revoked" || gs === "expired" ? gs : r.status;
+    const note = gs === "active" ? ` · access ends ${when(g.expires_at)}` : gs === "revoked" ? ` · revoked ${when(g.revoked_at)}` : "";
+    const actions = ["pending", "owner_approved"].includes(r.status)
+      ? `${r.status === "pending" ? `<button class="btn small" data-approve="${esc(r.id)}" type="button">Approve</button>` : ""}<button class="btn danger ghost small" data-reject="${esc(r.id)}" type="button">Reject</button>`
+      : gs === "active" ? `<button class="btn danger ghost small" data-revoke="${esc(g.id)}" data-item="${esc(itemName(r.vault_item_id))}" data-name="${esc(contactName(r.requester_contact_id))}" type="button">Revoke access</button>` : "";
+    return `<li class="item"><div class="main"><div class="title">${esc(contactName(r.requester_contact_id))} requested “${esc(itemName(r.vault_item_id))}”</div>
+    <div class="muted"><span class="pill ${esc(shown)}">${esc(shown.replace("_", " "))}</span> · ${when(r.requested_at)}${note}</div></div>
+    ${actions ? `<div class="actions">${actions}</div>` : ""}</li>`; }).join("")
     || empty("No access requests", "When a trusted contact asks for something, it will show up here.");
 }
 function renderAudit(events) {
@@ -361,8 +369,8 @@ function renderAudit(events) {
 }
 function skeleton() { const s = '<li class="skeleton" aria-hidden="true"></li>'.repeat(2); for (const id of ["items", "contacts", "requests"]) $(id).innerHTML = s; }
 async function refresh() {
-  const [items, contacts, requests, audit, me] = await Promise.all([api("/vault/items"), api("/trusted-contacts"), api("/access-requests"), api("/audit-events"), api("/auth/me")]);
-  Object.assign(state, { items, contacts, requests });
+  const [items, contacts, requests, grants, audit, me] = await Promise.all([api("/vault/items"), api("/trusted-contacts"), api("/access-requests"), api("/access-grants"), api("/audit-events"), api("/auth/me")]);
+  Object.assign(state, { items, contacts, requests, grants });
   $("identity").textContent = me.email; $("identity").title = me.email;
   $("demo-pill").classList.toggle("hidden", !isDemoEmail(me.email));
   render(); renderAudit(audit);
@@ -374,7 +382,7 @@ function signedIn(on) {
 }
 function showDashboard() { signedIn(true); skeleton(); refresh().catch(e => { if (e.message !== "Session expired") toast(e.message, true); }); }
 function signOut(msg) {
-  sessionStorage.removeItem("trustedAccessToken"); state.token = null; Object.assign(state, { items: [], contacts: [], requests: [] });
+  sessionStorage.removeItem("trustedAccessToken"); state.token = null; Object.assign(state, { items: [], contacts: [], requests: [], grants: [] });
   signedIn(false); document.querySelectorAll("form").forEach(f => f.reset()); updateDemoButton(); if (msg) toast(msg, true);
 }
 function setupTabs(list) {
@@ -511,6 +519,9 @@ document.addEventListener("click", async (e) => {
     } else if (d.approve) {
       if (!await confirmDialog("Approve this request?", "The contact will be able to see the item you shared. You can revoke access later.", "Approve")) return;
       await busy(b, () => api("/access-requests/" + d.approve + "/approve", { method: "POST" })); toast("Request approved."); await refresh();
+    } else if (d.revoke) {
+      if (!await confirmDialog("Revoke access?", d.name + " will immediately lose access to “" + d.item + "”. This can't be undone, but they can request access again.", "Revoke access", true)) return;
+      await busy(b, () => api("/access-grants/" + d.revoke + "/revoke", { method: "POST" })); toast("Access revoked."); await refresh();
     } else if (d.reject) {
       if (!await confirmDialog("Reject this request?", "The contact will not get access.", "Reject", true)) return;
       await busy(b, () => api("/access-requests/" + d.reject + "/reject", { method: "POST" })); toast("Request rejected."); await refresh();
