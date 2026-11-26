@@ -34,7 +34,10 @@ CREATE TABLE IF NOT EXISTS trusted_contacts (
     name TEXT NOT NULL,
     relationship TEXT NOT NULL,
     contact_method TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    public_key TEXT,
+    key_registered_at TEXT,
+    key_confirmed_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS vault_items (
@@ -89,6 +92,23 @@ CREATE TABLE IF NOT EXISTS access_grants (
     created_at TEXT NOT NULL
 );
 
+-- Key delivery. The server only ever stores ciphertext and wrapped keys: the
+-- share blob is encrypted by the owner's browser under a per-share key, and that
+-- key is wrapped (RSA-OAEP) to each confirmed contact's public key.
+CREATE TABLE IF NOT EXISTS item_shares (
+    vault_item_id TEXT PRIMARY KEY REFERENCES vault_items(id) ON DELETE CASCADE,
+    ciphertext TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS share_keys (
+    vault_item_id TEXT NOT NULL REFERENCES vault_items(id) ON DELETE CASCADE,
+    contact_id TEXT NOT NULL REFERENCES trusted_contacts(id) ON DELETE CASCADE,
+    wrapped_key TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (vault_item_id, contact_id)
+);
+
 CREATE TABLE IF NOT EXISTS audit_events (
     id TEXT PRIMARY KEY,
     owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -108,4 +128,14 @@ def connect(database_path: Path) -> sqlite3.Connection:
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     connection.executescript(SCHEMA)
+    _migrate(connection)
     return connection
+
+
+def _migrate(connection: sqlite3.Connection) -> None:
+    """Bring databases created before key delivery up to the current schema."""
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(trusted_contacts)")}
+    for column in ("public_key", "key_registered_at", "key_confirmed_at"):
+        if column not in columns:
+            connection.execute(f"ALTER TABLE trusted_contacts ADD COLUMN {column} TEXT")
+    connection.commit()

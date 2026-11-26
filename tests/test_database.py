@@ -69,3 +69,32 @@ def test_connection_can_be_used_from_another_thread(tmp_path) -> None:
     connection.close()
 
     assert errors == []
+
+
+def test_old_databases_are_migrated_with_key_delivery_columns(tmp_path) -> None:
+    path = tmp_path / "old.sqlite3"
+    legacy = sqlite3.connect(path)
+    legacy.executescript(
+        """
+        CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL, created_at TEXT NOT NULL);
+        CREATE TABLE trusted_contacts (id TEXT PRIMARY KEY,
+            owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            name TEXT NOT NULL, relationship TEXT NOT NULL,
+            contact_method TEXT NOT NULL, created_at TEXT NOT NULL);
+        INSERT INTO users VALUES ('u1', 'a@example.com', 'x', 'now');
+        INSERT INTO trusted_contacts VALUES ('c1', 'u1', 'Old', 'Friend', 'x', 'now');
+        """
+    )
+    legacy.commit()
+    legacy.close()
+
+    connection = connect(path)
+
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(trusted_contacts)")}
+    assert {"public_key", "key_registered_at", "key_confirmed_at"} <= columns
+    row = connection.execute("SELECT name, public_key FROM trusted_contacts").fetchone()
+    assert (row["name"], row["public_key"]) == ("Old", None)
+    tables = {r["name"] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {"item_shares", "share_keys"} <= tables
+    connect(path)  # migrating twice is harmless
