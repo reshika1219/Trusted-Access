@@ -34,6 +34,49 @@ def context(
     return user_from_session(connection, x_session_token), connection
 
 
+def _enforce_policy(
+    connection: Connection, owner_id: str, item_id: str, allowed_contact_ids: set[str]
+) -> None:
+    """End access for anyone the current policy no longer includes.
+
+    Open requests from contacts outside the policy are rejected and their active
+    grants are revoked, so narrowing or removing sharing takes effect at once.
+    """
+    allowed = list(allowed_contact_ids)
+    # With no allowed contacts every open request and grant is stale. (A bare
+    # "NOT IN (NULL)" would match nothing in SQL, so omit the clause instead.)
+    marks = ",".join("?" for _ in allowed)
+    request_filter = f"AND requester_contact_id NOT IN ({marks})" if allowed else ""
+    grant_filter = f"AND recipient_contact_id NOT IN ({marks})" if allowed else ""
+    stale_requests = connection.execute(
+        f"""
+        SELECT id FROM emergency_requests
+        WHERE vault_item_id = ? AND status IN ('pending', 'owner_approved')
+          {request_filter}
+        """,
+        [item_id, *allowed],
+    ).fetchall()
+    for row in stale_requests:
+        connection.execute(
+            "UPDATE emergency_requests SET status = 'rejected' WHERE id = ?", (row["id"],)
+        )
+        record_audit(connection, owner_id, "access_rejected", row["id"], owner_id)
+    stale_grants = connection.execute(
+        f"""
+        SELECT id FROM access_grants
+        WHERE vault_item_id = ? AND revoked_at IS NULL
+          {grant_filter}
+        """,
+        [item_id, *allowed],
+    ).fetchall()
+    for row in stale_grants:
+        connection.execute(
+            "UPDATE access_grants SET revoked_at = ? WHERE id = ?",
+            (utc_now().isoformat(), row["id"]),
+        )
+        record_audit(connection, owner_id, "access_revoked", row["id"], owner_id)
+
+
 def register_routes(app) -> None:
     @app.post("/trusted-contacts", status_code=status.HTTP_201_CREATED, tags=["contacts"])
     def create_contact(
@@ -153,6 +196,8 @@ def register_routes(app) -> None:
         if len(contacts) != len(set(request.contact_ids)):
             raise HTTPException(status_code=422, detail="Contact is not owned by this user")
 
+        # Replace, never accumulate: stale policies would keep granting access.
+        connection.execute("DELETE FROM access_policies WHERE vault_item_id = ?", (item_id,))
         policy_id = str(uuid4())
         connection.execute(
             """
@@ -172,6 +217,62 @@ def register_routes(app) -> None:
             "INSERT INTO policy_contacts (policy_id, contact_id) VALUES (?, ?)",
             [(policy_id, contact_id) for contact_id in set(request.contact_ids)],
         )
+        _enforce_policy(connection, owner_id, item_id, set(request.contact_ids))
         record_audit(connection, owner_id, "access_policy_changed", item_id, owner_id)
         connection.commit()
         return {"policy_id": policy_id}
+
+    @app.get("/vault/items/{item_id}/policy", tags=["permissions"])
+    def get_policy(
+        item_id: str,
+        auth: tuple[str, Connection] = Depends(context),
+    ) -> dict[str, object]:
+        owner_id, connection = auth
+        item = connection.execute(
+            "SELECT id FROM vault_items WHERE id = ? AND owner_id = ?",
+            (item_id, owner_id),
+        ).fetchone()
+        if item is None:
+            raise HTTPException(status_code=404, detail="Vault item not found")
+        policy = connection.execute(
+            """
+            SELECT id, access_mode, required_approvals FROM access_policies
+            WHERE vault_item_id = ? ORDER BY created_at DESC LIMIT 1
+            """,
+            (item_id,),
+        ).fetchone()
+        if policy is None:
+            return {"policy": None}
+        contact_ids = [
+            row["contact_id"]
+            for row in connection.execute(
+                "SELECT contact_id FROM policy_contacts WHERE policy_id = ? ORDER BY contact_id",
+                (policy["id"],),
+            ).fetchall()
+        ]
+        return {
+            "policy": {
+                "access_mode": policy["access_mode"],
+                "required_approvals": policy["required_approvals"],
+                "contact_ids": contact_ids,
+            }
+        }
+
+    @app.delete("/vault/items/{item_id}/policy", tags=["permissions"])
+    def delete_policy(
+        item_id: str,
+        auth: tuple[str, Connection] = Depends(context),
+    ) -> dict[str, str]:
+        """Stop sharing an item: removes its rules, open requests, and active grants."""
+        owner_id, connection = auth
+        item = connection.execute(
+            "SELECT id FROM vault_items WHERE id = ? AND owner_id = ?",
+            (item_id, owner_id),
+        ).fetchone()
+        if item is None:
+            raise HTTPException(status_code=404, detail="Vault item not found")
+        connection.execute("DELETE FROM access_policies WHERE vault_item_id = ?", (item_id,))
+        _enforce_policy(connection, owner_id, item_id, set())
+        record_audit(connection, owner_id, "access_policy_removed", item_id, owner_id)
+        connection.commit()
+        return {"item_id": item_id, "status": "not_shared"}
