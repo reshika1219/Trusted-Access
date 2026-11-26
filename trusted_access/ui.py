@@ -242,6 +242,19 @@ INDEX_HTML = r"""<!doctype html>
         <div class="row" style="margin-top:1rem"><button class="btn" id="export" type="button">Download export</button><button class="btn secondary" id="preview" type="button" aria-expanded="false" aria-controls="backup">Preview</button></div>
         <pre id="backup" class="hidden"></pre>
       </div>
+      <div class="card">
+        <h3>Restore from a backup</h3>
+        <p class="muted">Choose a backup file you downloaded earlier. Records are added to your vault. Nothing is overwritten or deleted.</p>
+        <label for="import-file">Backup file</label>
+        <input id="import-file" type="file" accept="application/json,.json">
+        <p class="error-text" role="alert" id="import-error"></p>
+        <div id="import-preview" class="hidden">
+          <p id="import-summary"></p>
+          <p class="muted" id="import-notes"></p>
+          <ul class="list" id="import-list" style="margin-top:.75rem"></ul>
+          <div class="row" style="margin-top:1rem"><button class="btn" id="import-go" type="button">Import</button><button class="btn secondary" id="import-cancel" type="button">Cancel</button></div>
+        </div>
+      </div>
     </div>
   </section>
 </main>
@@ -383,7 +396,7 @@ function signedIn(on) {
 function showDashboard() { signedIn(true); skeleton(); refresh().catch(e => { if (e.message !== "Session expired") toast(e.message, true); }); }
 function signOut(msg) {
   sessionStorage.removeItem("trustedAccessToken"); state.token = null; Object.assign(state, { items: [], contacts: [], requests: [], grants: [] });
-  signedIn(false); document.querySelectorAll("form").forEach(f => f.reset()); updateDemoButton(); if (msg) toast(msg, true);
+  signedIn(false); document.querySelectorAll("form").forEach(f => f.reset()); updateDemoButton(); if (typeof resetImport === "function") resetImport(); if (msg) toast(msg, true);
 }
 function setupTabs(list) {
   const tabs = [...list.querySelectorAll("[role=tab]")];
@@ -562,6 +575,82 @@ $("preview").onclick = async (e) => {
   const pre = $("backup"), open = pre.classList.contains("hidden");
   try { if (open) await loadBackup(e.currentTarget); pre.classList.toggle("hidden", !open); e.currentTarget.setAttribute("aria-expanded", open); e.currentTarget.textContent = open ? "Hide preview" : "Preview"; }
   catch (x) { if (x.message !== "Session expired") toast(x.message, true); }
+};
+/* Backup import: the file is untrusted input. Validate it here, then restore through the normal create APIs. */
+const IMPORT_MAX = { bytes: 10000000, items: 500, contacts: 200 };
+let pendingImport = null;
+const okStr = (v, max) => typeof v === "string" && v.trim().length > 0 && v.length <= max;
+function parseBackup(text) {
+  let file; try { file = JSON.parse(text); } catch { throw new Error("That file isn't valid JSON. Choose a Trusted Access backup (.json)."); }
+  if (!file || typeof file !== "object" || file.format_version !== 1 || typeof file.encrypted_payload !== "string")
+    throw new Error("This doesn't look like a Trusted Access backup (expected format version 1).");
+  let payload; try { payload = JSON.parse(file.encrypted_payload); } catch { payload = null; }
+  if (!payload || !Array.isArray(payload.vault_items) || !Array.isArray(payload.trusted_contacts))
+    throw new Error("The backup contents can't be read. The file may be damaged or from a different version.");
+  if (payload.vault_items.length > IMPORT_MAX.items || payload.trusted_contacts.length > IMPORT_MAX.contacts)
+    throw new Error("This backup is larger than this prototype can import at once.");
+  const key = (...parts) => JSON.stringify(parts);
+  const haveItems = new Set(state.items.map(i => key(i.category, i.title, i.ciphertext)));
+  const haveContacts = new Set(state.contacts.map(c => key(c.name, c.relationship, c.contact_method)));
+  const out = { file, items: [], contacts: [], invalid: 0, duplicates: 0 };
+  for (const i of payload.vault_items) {
+    if (!i || !okStr(i.category, 64) || !okStr(i.title, 200) || !okStr(i.ciphertext, 2000000)) { out.invalid++; continue; }
+    const k = key(i.category, i.title, i.ciphertext);
+    if (haveItems.has(k)) { out.duplicates++; continue; }
+    haveItems.add(k); out.items.push({ category: i.category, title: i.title, ciphertext: i.ciphertext });
+  }
+  for (const c of payload.trusted_contacts) {
+    if (!c || !okStr(c.name, 200) || !okStr(c.relationship, 100) || !okStr(c.contact_method, 320)) { out.invalid++; continue; }
+    const k = key(c.name, c.relationship, c.contact_method);
+    if (haveContacts.has(k)) { out.duplicates++; continue; }
+    haveContacts.add(k); out.contacts.push({ name: c.name, relationship: c.relationship, contact_method: c.contact_method });
+  }
+  return out;
+}
+const plural = (n, one, many) => n + " " + (n === 1 ? one : many);
+function resetImport() {
+  pendingImport = null; $("import-file").value = ""; $("import-error").textContent = ""; $("import-preview").classList.add("hidden");
+}
+function renderImportPreview(p) {
+  const total = p.items.length + p.contacts.length;
+  $("import-summary").innerHTML = total
+    ? `Ready to add <strong>${esc(plural(p.items.length, "vault item", "vault items"))}</strong> and <strong>${esc(plural(p.contacts.length, "contact", "contacts"))}</strong>.`
+    : "Nothing new to import. Everything in this file is already in your account.";
+  const notes = [];
+  if (p.duplicates) notes.push(plural(p.duplicates, "record is", "records are") + " already here and will be skipped.");
+  if (p.invalid) notes.push(plural(p.invalid, "record is", "records are") + " malformed and will be skipped.");
+  notes.push("Sharing rules aren't included in backups, so restored items start private. Items open only in a browser that holds the original encryption key.");
+  $("import-notes").textContent = notes.join(" ");
+  const more = (n) => n > 5 ? `<li class="muted">…and ${n - 5} more</li>` : "";
+  $("import-list").innerHTML =
+    p.items.slice(0, 5).map(i => `<li class="item"><div class="main"><div class="title">${esc(i.title)}</div><div class="muted"><span class="pill">${esc(i.category)}</span></div></div></li>`).join("") + more(p.items.length) +
+    p.contacts.slice(0, 5).map(c => `<li class="item"><div class="main"><div class="title">${esc(c.name)}</div><div class="muted">${esc(c.relationship)} · ${esc(c.contact_method)}</div></div></li>`).join("") + more(p.contacts.length);
+  $("import-go").textContent = total ? "Import " + plural(total, "record", "records") : "Nothing to import";
+  $("import-go").disabled = !total;
+  $("import-preview").classList.remove("hidden");
+}
+$("import-file").onchange = async (e) => {
+  const file = e.target.files[0]; $("import-error").textContent = ""; $("import-preview").classList.add("hidden"); pendingImport = null;
+  if (!file) return;
+  if (file.size > IMPORT_MAX.bytes) { $("import-error").textContent = "That file is too large to be a backup."; return; }
+  try { pendingImport = parseBackup(await file.text()); renderImportPreview(pendingImport); }
+  catch (x) { $("import-error").textContent = x.message; }
+};
+$("import-cancel").onclick = resetImport;
+$("import-go").onclick = async (e) => {
+  const p = pendingImport; if (!p) return;
+  let done = 0; const total = p.items.length + p.contacts.length;
+  try {
+    await busy(e.currentTarget, async () => {
+      await api("/backup/import", { method: "POST", body: JSON.stringify({ format_version: 1, encrypted_payload: p.file.encrypted_payload }) });
+      for (const i of p.items) { await api("/vault/items", { method: "POST", body: JSON.stringify(i) }); done++; }
+      for (const c of p.contacts) { await api("/trusted-contacts", { method: "POST", body: JSON.stringify(c) }); done++; }
+    });
+    toast("Restored " + plural(done, "record", "records") + ". Restored items are private until you share them.");
+  } catch (x) {
+    if (x.message !== "Session expired") toast("Imported " + done + " of " + total + " records before an error: " + x.message, true);
+  }
+  resetImport(); if (state.token) await refresh().catch(() => {});
 };
 if (state.token) showDashboard();
 </script>

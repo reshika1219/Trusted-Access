@@ -53,3 +53,14 @@ def test_dashboard_offers_revoke_access_for_active_grants(tmp_path) -> None:
     assert "Revoke access" in html
     assert 'api("/access-grants")' in html
     assert '"/access-grants/" + d.revoke + "/revoke"' in html
+
+
+def test_dashboard_offers_validated_backup_restore(tmp_path) -> None:
+    app.state.database_path = tmp_path / "ui.sqlite3"
+    html = TestClient(app).get("/").text
+
+    assert "Restore from a backup" in html
+    assert 'type="file"' in html
+    assert "function parseBackup" in html
+    assert 'api("/backup/import"' in html
+    assert "Sharing rules aren't included in backups" in html
