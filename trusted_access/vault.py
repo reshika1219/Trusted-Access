@@ -109,6 +109,47 @@ def register_routes(app) -> None:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    @app.put("/vault/items/{item_id}", tags=["vault"])
+    def update_vault_item(
+        item_id: str,
+        request: VaultItemCreate,
+        context: tuple[str, Connection] = Depends(current_user_and_database),
+    ) -> dict[str, str]:
+        owner_id, connection = context
+        if request.category not in ALLOWED_CATEGORIES:
+            raise HTTPException(status_code=422, detail="Unsupported vault category")
+        updated = connection.execute(
+            """
+            UPDATE vault_items
+            SET category = ?, title = ?, ciphertext = ?, updated_at = ?
+            WHERE id = ? AND owner_id = ?
+            """,
+            (request.category, request.title, request.ciphertext, utc_now().isoformat(), item_id, owner_id),
+        )
+        if updated.rowcount != 1:
+            raise HTTPException(status_code=404, detail="Vault item not found")
+        record_audit(connection, owner_id, "vault_item_updated", item_id, owner_id)
+        connection.commit()
+        return {"item_id": item_id, "status": "updated"}
+
+    @app.delete("/vault/items/{item_id}", tags=["vault"])
+    def delete_vault_item(
+        item_id: str,
+        context: tuple[str, Connection] = Depends(current_user_and_database),
+    ) -> dict[str, str]:
+        # Policies, requests, approvals, and grants for the item are removed by
+        # foreign-key cascade, so any outstanding access ends immediately.
+        owner_id, connection = context
+        deleted = connection.execute(
+            "DELETE FROM vault_items WHERE id = ? AND owner_id = ?",
+            (item_id, owner_id),
+        )
+        if deleted.rowcount != 1:
+            raise HTTPException(status_code=404, detail="Vault item not found")
+        record_audit(connection, owner_id, "vault_item_deleted", item_id, owner_id)
+        connection.commit()
+        return {"item_id": item_id, "status": "deleted"}
+
     @app.get("/vault/items/{item_id}", tags=["vault"])
     def get_vault_item(
         item_id: str,

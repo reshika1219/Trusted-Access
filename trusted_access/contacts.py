@@ -90,6 +90,24 @@ def register_routes(app) -> None:
         connection.commit()
         return {"contact_token": raw_token}
 
+    @app.delete("/trusted-contacts/{contact_id}", tags=["contacts"])
+    def delete_contact(
+        contact_id: str,
+        auth: tuple[str, Connection] = Depends(context),
+    ) -> dict[str, str]:
+        # Invites, requests, approvals, policy membership, and grants for the
+        # contact are removed by foreign-key cascade.
+        owner_id, connection = auth
+        deleted = connection.execute(
+            "DELETE FROM trusted_contacts WHERE id = ? AND owner_id = ?",
+            (contact_id, owner_id),
+        )
+        if deleted.rowcount != 1:
+            raise HTTPException(status_code=404, detail="Trusted contact not found")
+        record_audit(connection, owner_id, "trusted_contact_deleted", contact_id, owner_id)
+        connection.commit()
+        return {"contact_id": contact_id, "status": "deleted"}
+
     @app.get("/trusted-contacts", tags=["contacts"])
     def list_contacts(
         auth: tuple[str, Connection] = Depends(context),
