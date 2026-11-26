@@ -238,9 +238,8 @@ INDEX_HTML = r"""<!doctype html>
     <div role="tabpanel" id="p-backup" aria-labelledby="t-backup" class="hidden">
       <div class="card">
         <h3>Encrypted backup</h3>
-        <p class="muted">Download a copy of your vault and contacts. Store it somewhere safe, away from this device.</p>
-        <div class="row" style="margin-top:1rem"><button class="btn" id="export" type="button">Download export</button><button class="btn secondary" id="preview" type="button" aria-expanded="false" aria-controls="backup">Preview</button></div>
-        <pre id="backup" class="hidden"></pre>
+        <p class="muted">Download a copy of your vault and contacts. The whole file is encrypted in this browser with a passphrase you choose. We never see it and can't recover it.</p>
+        <div class="row" style="margin-top:1rem"><button class="btn" id="export" type="button">Download encrypted backup</button></div>
       </div>
       <div class="card">
         <h3>Restore from a backup</h3>
@@ -248,6 +247,12 @@ INDEX_HTML = r"""<!doctype html>
         <label for="import-file">Backup file</label>
         <input id="import-file" type="file" accept="application/json,.json">
         <p class="error-text" role="alert" id="import-error"></p>
+        <div id="import-unlock" class="hidden">
+          <p class="muted">This backup is encrypted. Enter the passphrase you chose when you made it.</p>
+          <label for="import-pass">Backup passphrase</label>
+          <input id="import-pass" type="password" autocomplete="off">
+          <button class="btn block" id="import-unlock-btn" type="button">Unlock backup</button>
+        </div>
         <div id="import-preview" class="hidden">
           <p id="import-summary"></p>
           <p class="muted" id="import-notes"></p>
@@ -269,6 +274,13 @@ INDEX_HTML = r"""<!doctype html>
   <label for="p-approvals">Approvals required</label><input id="p-approvals" name="required_approvals" type="number" min="1" value="1"><p class="field-hint">Cannot exceed the number of selected contacts.</p>
   <p class="error-text" role="alert" id="policy-error"></p>
   <div class="row end"><button class="btn secondary" type="button" id="policy-cancel">Cancel</button><button class="btn" type="submit">Save rules</button></div></form></dialog>
+<dialog id="export-dialog" aria-labelledby="export-title"><form id="export-form" novalidate><h3 id="export-title">Protect your backup</h3>
+  <p class="muted">Your backup is encrypted in this browser with a passphrase you choose. Without it, the file can't be opened, and nobody can recover it for you.</p>
+  <label for="ex-pass">Backup passphrase</label><input id="ex-pass" type="password" autocomplete="new-password">
+  <label for="ex-pass2">Confirm passphrase</label><input id="ex-pass2" type="password" autocomplete="new-password">
+  <p class="field-hint">At least 12 characters. Store it separately from the backup file.</p>
+  <p class="error-text" role="alert" id="export-error"></p>
+  <div class="row end"><button class="btn secondary" type="button" id="export-cancel">Cancel</button><button class="btn" type="submit">Encrypt and download</button></div></form></dialog>
 <div id="toasts" aria-live="polite" aria-atomic="false"></div>
 
 <script>
@@ -396,7 +408,7 @@ function signedIn(on) {
 function showDashboard() { signedIn(true); skeleton(); refresh().catch(e => { if (e.message !== "Session expired") toast(e.message, true); }); }
 function signOut(msg) {
   sessionStorage.removeItem("trustedAccessToken"); state.token = null; Object.assign(state, { items: [], contacts: [], requests: [], grants: [] });
-  signedIn(false); document.querySelectorAll("form").forEach(f => f.reset()); updateDemoButton(); if (typeof resetImport === "function") resetImport(); if (msg) toast(msg, true);
+  signedIn(false); document.querySelectorAll("form").forEach(f => f.reset()); updateDemoButton(); document.querySelectorAll("dialog[open]").forEach(d => d.close()); if (typeof resetImport === "function") resetImport(); if (msg) toast(msg, true);
 }
 function setupTabs(list) {
   const tabs = [...list.querySelectorAll("[role=tab]")];
@@ -561,38 +573,77 @@ $("token-copy").onclick = async (e) => {
     toast("Couldn't copy automatically. The token is selected: press Ctrl/Cmd+C.", true);
   }
 };
-let backupData = null;
-async function loadBackup(button) { backupData = await busy(button, () => api("/backup/export")); $("backup").textContent = JSON.stringify(backupData, null, 2); }
-$("export").onclick = async (e) => {
+/* Backup encryption: the whole payload is encrypted in this browser with a passphrase the server never sees. */
+const BACKUP_AAD = new TextEncoder().encode("trusted-access-backup:2");
+const KDF = { iterations: 600000, min: 100000, max: 2000000 };
+const randomBytes = (n) => crypto.getRandomValues(new Uint8Array(n));
+async function backupKey(pass, salt, iterations, usage) {
+  const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pass.normalize("NFKC")), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey({ name: "PBKDF2", hash: "SHA-256", salt, iterations }, base, { name: "AES-GCM", length: 256 }, false, [usage]);
+}
+async function encryptBackup(payload, pass) {
+  const salt = randomBytes(16), iv = randomBytes(12);
+  const key = await backupKey(pass, salt, KDF.iterations, "encrypt");
+  const data = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: BACKUP_AAD }, key, new TextEncoder().encode(JSON.stringify(payload)));
+  return { format_version: 2, app: "trusted-access", encryption: "AES-256-GCM", kdf: "PBKDF2-SHA256", iterations: KDF.iterations, salt: b64(salt), iv: b64(iv), ciphertext: b64(new Uint8Array(data)) };
+}
+async function decryptBackup(file, pass) {
   try {
-    await loadBackup(e.currentTarget);
-    const url = URL.createObjectURL(new Blob([JSON.stringify(backupData, null, 2)], { type: "application/json" }));
+    const key = await backupKey(pass, unb64(file.salt), file.iterations, "decrypt");
+    const data = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(file.iv), additionalData: BACKUP_AAD }, key, unb64(file.ciphertext));
+    return JSON.parse(new TextDecoder().decode(data));
+  } catch { throw new Error("Couldn't unlock this backup. The passphrase is wrong, or the file was changed."); }
+}
+$("export").onclick = () => { $("export-error").textContent = ""; $("export-dialog").showModal(); $("ex-pass").focus(); };
+$("export-cancel").onclick = () => $("export-dialog").close();
+$("export-dialog").addEventListener("close", () => $("export-form").reset());
+$("export-form").onsubmit = async (e) => {
+  e.preventDefault(); const pass = $("ex-pass").value, err = $("export-error");
+  if (pass.length < 12) return void (err.textContent = "Use at least 12 characters.");
+  if (pass !== $("ex-pass2").value) return void (err.textContent = "The passphrases don't match.");
+  err.textContent = "";
+  try {
+    const file = await busy(e.submitter, async () => {
+      const data = await api("/backup/export"), inner = JSON.parse(data.encrypted_payload);
+      return encryptBackup({ exported_at: new Date().toISOString(), vault_items: inner.vault_items, trusted_contacts: inner.trusted_contacts }, pass);
+    });
+    const url = URL.createObjectURL(new Blob([JSON.stringify(file)], { type: "application/json" }));
     const a = Object.assign(document.createElement("a"), { href: url, download: "trusted-access-backup-" + new Date().toISOString().slice(0, 10) + ".json" });
-    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url); toast("Backup downloaded. Store it somewhere safe."); refresh().catch(() => {});
-  } catch (x) { if (x.message !== "Session expired") toast(x.message, true); }
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    $("export-dialog").close(); toast("Encrypted backup downloaded. Keep the passphrase somewhere safe."); refresh().catch(() => {});
+  } catch (x) { if (x.message === "Session expired") $("export-dialog").close(); else err.textContent = x.message; }
 };
-$("preview").onclick = async (e) => {
-  const pre = $("backup"), open = pre.classList.contains("hidden");
-  try { if (open) await loadBackup(e.currentTarget); pre.classList.toggle("hidden", !open); e.currentTarget.setAttribute("aria-expanded", open); e.currentTarget.textContent = open ? "Hide preview" : "Preview"; }
-  catch (x) { if (x.message !== "Session expired") toast(x.message, true); }
-};
+
 /* Backup import: the file is untrusted input. Validate it here, then restore through the normal create APIs. */
 const IMPORT_MAX = { bytes: 10000000, items: 500, contacts: 200 };
-let pendingImport = null;
+let pendingImport = null, lockedBackup = null;
 const okStr = (v, max) => typeof v === "string" && v.trim().length > 0 && v.length <= max;
-function parseBackup(text) {
+const NOT_BACKUP = "This doesn't look like a Trusted Access backup.";
+function parseBackupFile(text) {
   let file; try { file = JSON.parse(text); } catch { throw new Error("That file isn't valid JSON. Choose a Trusted Access backup (.json)."); }
-  if (!file || typeof file !== "object" || file.format_version !== 1 || typeof file.encrypted_payload !== "string")
-    throw new Error("This doesn't look like a Trusted Access backup (expected format version 1).");
-  let payload; try { payload = JSON.parse(file.encrypted_payload); } catch { payload = null; }
-  if (!payload || !Array.isArray(payload.vault_items) || !Array.isArray(payload.trusted_contacts))
+  if (!file || typeof file !== "object" || Array.isArray(file)) throw new Error(NOT_BACKUP);
+  if (file.format_version === 2) {
+    const b64ok = (v, min, max) => typeof v === "string" && v.length >= min && v.length <= max && /^[A-Za-z0-9+/]+={0,2}$/.test(v);
+    if (file.app !== "trusted-access" || file.encryption !== "AES-256-GCM" || file.kdf !== "PBKDF2-SHA256" || !Number.isInteger(file.iterations)
+      || file.iterations < KDF.min || file.iterations > KDF.max || !b64ok(file.salt, 16, 64) || !b64ok(file.iv, 16, 24) || !b64ok(file.ciphertext, 24, IMPORT_MAX.bytes))
+      throw new Error("The backup header is invalid or damaged.");
+    return { locked: true, file, notice: file.ciphertext };
+  }
+  if (file.format_version === 1 && typeof file.encrypted_payload === "string") {
+    let payload; try { payload = JSON.parse(file.encrypted_payload); } catch { payload = null; }
+    return { payload, legacy: true, notice: file.encrypted_payload };
+  }
+  throw new Error(NOT_BACKUP + " (unsupported format version).");
+}
+function planImport(payload) {
+  if (!payload || typeof payload !== "object" || !Array.isArray(payload.vault_items) || !Array.isArray(payload.trusted_contacts))
     throw new Error("The backup contents can't be read. The file may be damaged or from a different version.");
   if (payload.vault_items.length > IMPORT_MAX.items || payload.trusted_contacts.length > IMPORT_MAX.contacts)
     throw new Error("This backup is larger than this prototype can import at once.");
   const key = (...parts) => JSON.stringify(parts);
   const haveItems = new Set(state.items.map(i => key(i.category, i.title, i.ciphertext)));
   const haveContacts = new Set(state.contacts.map(c => key(c.name, c.relationship, c.contact_method)));
-  const out = { file, items: [], contacts: [], invalid: 0, duplicates: 0 };
+  const out = { items: [], contacts: [], invalid: 0, duplicates: 0 };
   for (const i of payload.vault_items) {
     if (!i || !okStr(i.category, 64) || !okStr(i.title, 200) || !okStr(i.ciphertext, 2000000)) { out.invalid++; continue; }
     const k = key(i.category, i.title, i.ciphertext);
@@ -609,7 +660,8 @@ function parseBackup(text) {
 }
 const plural = (n, one, many) => n + " " + (n === 1 ? one : many);
 function resetImport() {
-  pendingImport = null; $("import-file").value = ""; $("import-error").textContent = ""; $("import-preview").classList.add("hidden");
+  pendingImport = null; lockedBackup = null; $("import-file").value = ""; $("import-pass").value = "";
+  $("import-error").textContent = ""; $("import-preview").classList.add("hidden"); $("import-unlock").classList.add("hidden");
 }
 function renderImportPreview(p) {
   const total = p.items.length + p.contacts.length;
@@ -617,6 +669,7 @@ function renderImportPreview(p) {
     ? `Ready to add <strong>${esc(plural(p.items.length, "vault item", "vault items"))}</strong> and <strong>${esc(plural(p.contacts.length, "contact", "contacts"))}</strong>.`
     : "Nothing new to import. Everything in this file is already in your account.";
   const notes = [];
+  if (p.legacy) notes.push("This is an older backup that isn't encrypted. Delete it once you've restored from it.");
   if (p.duplicates) notes.push(plural(p.duplicates, "record is", "records are") + " already here and will be skipped.");
   if (p.invalid) notes.push(plural(p.invalid, "record is", "records are") + " malformed and will be skipped.");
   notes.push("Sharing rules aren't included in backups, so restored items start private. Items open only in a browser that holds the original encryption key.");
@@ -630,19 +683,34 @@ function renderImportPreview(p) {
   $("import-preview").classList.remove("hidden");
 }
 $("import-file").onchange = async (e) => {
-  const file = e.target.files[0]; $("import-error").textContent = ""; $("import-preview").classList.add("hidden"); pendingImport = null;
+  const file = e.target.files[0]; $("import-error").textContent = ""; $("import-preview").classList.add("hidden"); $("import-unlock").classList.add("hidden"); pendingImport = null; lockedBackup = null; $("import-pass").value = "";
   if (!file) return;
   if (file.size > IMPORT_MAX.bytes) { $("import-error").textContent = "That file is too large to be a backup."; return; }
-  try { pendingImport = parseBackup(await file.text()); renderImportPreview(pendingImport); }
-  catch (x) { $("import-error").textContent = x.message; }
+  try {
+    const parsed = parseBackupFile(await file.text());
+    if (parsed.locked) { lockedBackup = parsed; $("import-unlock").classList.remove("hidden"); $("import-pass").focus(); }
+    else { pendingImport = { ...planImport(parsed.payload), notice: parsed.notice, legacy: true }; renderImportPreview(pendingImport); }
+  } catch (x) { $("import-error").textContent = x.message; }
 };
+async function unlockBackup() {
+  if (!lockedBackup) return; const pass = $("import-pass").value, err = $("import-error");
+  if (!pass) return void (err.textContent = "Enter the passphrase.");
+  err.textContent = "";
+  try {
+    const payload = await busy($("import-unlock-btn"), () => decryptBackup(lockedBackup.file, pass));
+    pendingImport = { ...planImport(payload), notice: lockedBackup.notice };
+    $("import-unlock").classList.add("hidden"); $("import-pass").value = ""; lockedBackup = null; renderImportPreview(pendingImport);
+  } catch (x) { err.textContent = x.message; $("import-pass").select(); }
+}
+$("import-unlock-btn").onclick = unlockBackup;
+$("import-pass").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); unlockBackup(); } };
 $("import-cancel").onclick = resetImport;
 $("import-go").onclick = async (e) => {
   const p = pendingImport; if (!p) return;
   let done = 0; const total = p.items.length + p.contacts.length;
   try {
     await busy(e.currentTarget, async () => {
-      await api("/backup/import", { method: "POST", body: JSON.stringify({ format_version: 1, encrypted_payload: p.file.encrypted_payload }) });
+      await api("/backup/import", { method: "POST", body: JSON.stringify({ format_version: 1, encrypted_payload: p.notice }) });
       for (const i of p.items) { await api("/vault/items", { method: "POST", body: JSON.stringify(i) }); done++; }
       for (const c of p.contacts) { await api("/trusted-contacts", { method: "POST", body: JSON.stringify(c) }); done++; }
     });

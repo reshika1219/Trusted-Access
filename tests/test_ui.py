@@ -64,3 +64,17 @@ def test_dashboard_offers_validated_backup_restore(tmp_path) -> None:
     assert "function parseBackup" in html
     assert 'api("/backup/import"' in html
     assert "Sharing rules aren't included in backups" in html
+
+
+def test_dashboard_encrypts_the_whole_backup_client_side(tmp_path) -> None:
+    app.state.database_path = tmp_path / "ui.sqlite3"
+    html = TestClient(app).get("/").text
+
+    assert "Download encrypted backup" in html
+    assert "PBKDF2" in html and "AES-256-GCM" in html
+    assert "additionalData: BACKUP_AAD" in html
+    assert "KDF.min" in html and "KDF.max" in html
+    assert "Unlock backup" in html
+    # The old plaintext download and preview must be gone.
+    assert 'id="preview"' not in html
+    assert "JSON.stringify(backupData" not in html
