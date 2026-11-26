@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from trusted_access.auth import user_from_session, utc_now
 from trusted_access.main import database
-from trusted_access.vault import record_audit
+from trusted_access.vault import clear_item_shares, record_audit
 
 
 class ContactCreate(BaseModel):
@@ -154,18 +154,22 @@ def register_routes(app) -> None:
     @app.get("/trusted-contacts", tags=["contacts"])
     def list_contacts(
         auth: tuple[str, Connection] = Depends(context),
-    ) -> list[dict[str, str]]:
+    ) -> list[dict[str, object]]:
         owner_id, connection = auth
         rows = connection.execute(
             """
-            SELECT id, name, relationship, contact_method, created_at
+            SELECT id, name, relationship, contact_method, created_at,
+                   public_key, key_confirmed_at IS NOT NULL AS key_confirmed
             FROM trusted_contacts
             WHERE owner_id = ?
             ORDER BY created_at
             """,
             (owner_id,),
         ).fetchall()
-        return [dict(row) for row in rows]
+        contacts = [dict(row) for row in rows]
+        for contact in contacts:
+            contact["key_confirmed"] = bool(contact["key_confirmed"])
+        return contacts
 
     @app.put("/vault/items/{item_id}/policy", tags=["permissions"])
     def set_policy(
@@ -198,6 +202,7 @@ def register_routes(app) -> None:
 
         # Replace, never accumulate: stale policies would keep granting access.
         connection.execute("DELETE FROM access_policies WHERE vault_item_id = ?", (item_id,))
+        clear_item_shares(connection, item_id)  # the owner re-publishes with fresh keys
         policy_id = str(uuid4())
         connection.execute(
             """
@@ -272,6 +277,7 @@ def register_routes(app) -> None:
         if item is None:
             raise HTTPException(status_code=404, detail="Vault item not found")
         connection.execute("DELETE FROM access_policies WHERE vault_item_id = ?", (item_id,))
+        clear_item_shares(connection, item_id)
         _enforce_policy(connection, owner_id, item_id, set())
         record_audit(connection, owner_id, "access_policy_removed", item_id, owner_id)
         connection.commit()

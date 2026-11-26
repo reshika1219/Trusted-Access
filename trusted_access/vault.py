@@ -62,6 +62,12 @@ def record_audit(
     )
 
 
+def clear_item_shares(connection: Connection, item_id: str) -> None:
+    """Drop an item's delivered share so stale content or keys are never served."""
+    connection.execute("DELETE FROM share_keys WHERE vault_item_id = ?", (item_id,))
+    connection.execute("DELETE FROM item_shares WHERE vault_item_id = ?", (item_id,))
+
+
 def register_routes(app) -> None:
     @app.post("/vault/items", status_code=status.HTTP_201_CREATED, tags=["vault"])
     def create_vault_item(
@@ -128,6 +134,7 @@ def register_routes(app) -> None:
         )
         if updated.rowcount != 1:
             raise HTTPException(status_code=404, detail="Vault item not found")
+        clear_item_shares(connection, item_id)  # the shared copy is now out of date
         record_audit(connection, owner_id, "vault_item_updated", item_id, owner_id)
         connection.commit()
         return {"item_id": item_id, "status": "updated"}

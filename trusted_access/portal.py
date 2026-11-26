@@ -21,13 +21,19 @@ def register_routes(app) -> None:
     @app.get("/contact/me", tags=["contact portal"])
     def contact_profile(
         auth: tuple[str, Connection] = Depends(contact_context),
-    ) -> dict[str, str]:
+    ) -> dict[str, object]:
         contact_id, connection = auth
         row = connection.execute(
-            "SELECT id, name, relationship FROM trusted_contacts WHERE id = ?",
+            """
+            SELECT id, name, relationship, public_key,
+                   key_confirmed_at IS NOT NULL AS key_confirmed
+            FROM trusted_contacts WHERE id = ?
+            """,
             (contact_id,),
         ).fetchone()
-        return dict(row)
+        profile = dict(row)
+        profile["key_confirmed"] = bool(profile["key_confirmed"])
+        return profile
 
     @app.get("/contact/items", tags=["contact portal"])
     def contact_items(

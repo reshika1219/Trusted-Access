@@ -172,6 +172,10 @@ from trusted_access.portal import register_routes as register_portal_routes
 
 register_portal_routes(app)
 
+from trusted_access.keys import register_routes as register_key_routes
+
+register_key_routes(app)
+
 from trusted_access.backup import register_routes as register_backup_routes
 
 register_backup_routes(app)

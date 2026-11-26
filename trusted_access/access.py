@@ -230,7 +230,7 @@ def register_routes(app) -> None:
     def view_grant(
         grant_id: str,
         auth: tuple[str, Connection] = Depends(contact_context),
-    ) -> dict[str, str]:
+    ) -> dict[str, object]:
         contact_id, connection = auth
         row = connection.execute(
             """
@@ -251,9 +251,22 @@ def register_routes(app) -> None:
         owner_id = connection.execute(
             "SELECT owner_id FROM vault_items WHERE id = ?", (row["item_id"],)
         ).fetchone()["owner_id"]
+        # Release the wrapped key only now, while the grant is active. The server
+        # holds ciphertext and a key wrapped to this contact, never a usable key.
+        share = connection.execute(
+            """
+            SELECT s.ciphertext, k.wrapped_key
+            FROM item_shares s
+            JOIN share_keys k ON k.vault_item_id = s.vault_item_id AND k.contact_id = ?
+            WHERE s.vault_item_id = ?
+            """,
+            (contact_id, row["item_id"]),
+        ).fetchone()
         record_audit(connection, owner_id, "access_viewed", grant_id, contact_id)
         connection.commit()
         return {
+            "share_ciphertext": share["ciphertext"] if share else None,
+            "wrapped_key": share["wrapped_key"] if share else None,
             "item_id": row["item_id"],
             "category": row["category"],
             "title": row["title"],
