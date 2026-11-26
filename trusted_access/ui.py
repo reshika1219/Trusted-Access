@@ -265,7 +265,9 @@ const esc = (v) => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&
 const LABELS = {
   trusted_contact_created: "Trusted contact added", access_policy_changed: "Sharing rules changed", vault_item_created: "Vault item saved",
   access_approved: "Access request approved", access_rejected: "Access request rejected", access_revoked: "Access revoked",
-  backup_exported: "Backup exported", access_requested: "Access requested", contact_invited: "Contact invite created",
+  backup_exported: "Backup exported", access_requested: "Access requested", trusted_contact_invited: "Contact invite created",
+  access_owner_approved: "Owner approved, awaiting contacts", access_granted: "Access granted", access_viewed: "Shared item viewed",
+  backup_import_requested: "Backup import requested",
 };
 const label = (t) => LABELS[t] || String(t).replace(/_/g, " ").replace(/^./, c => c.toUpperCase());
 function parseDate(s) { if (!s) return null; let v = String(s).replace(" ", "T"); if (!/[zZ]|[+-]\d\d:?\d\d$/.test(v)) v += "Z"; const d = new Date(v); return isNaN(d) ? null : d; }
@@ -529,7 +531,11 @@ $("policy-form").onsubmit = async (e) => {
 $("token-close").onclick = () => { $("token-dialog").close(); $("token-value").textContent = ""; };
 $("token-copy").onclick = async (e) => {
   try { await navigator.clipboard.writeText($("token-value").textContent); e.target.textContent = "Copied ✓"; setTimeout(() => e.target.textContent = "Copy", 2000); }
-  catch { toast("Copy failed. Select the text and copy it manually.", true); }
+  catch {
+    const range = document.createRange(); range.selectNodeContents($("token-value"));
+    const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range);
+    toast("Couldn't copy automatically. The token is selected: press Ctrl/Cmd+C.", true);
+  }
 };
 let backupData = null;
 async function loadBackup(button) { backupData = await busy(button, () => api("/backup/export")); $("backup").textContent = JSON.stringify(backupData, null, 2); }
