@@ -103,7 +103,7 @@ INDEX_HTML = r"""<!doctype html>
     .item .actions { display: flex; gap: .4rem; flex-wrap: wrap; }
     .pill { display: inline-block; padding: .05rem .6rem; border-radius: 99px; font-size: .78rem; font-weight: 600; background: var(--border); color: var(--text); vertical-align: middle; }
     .pill.pending { background: var(--warn-bg); color: var(--warn-text); }
-    .pill.approved, .pill.owner_approved, .pill.granted { background: var(--ok-bg); color: var(--ok); }
+    .pill.approved, .pill.owner_approved, .pill.granted, .pill.active { background: var(--ok-bg); color: var(--ok); }
     .pill.rejected, .pill.revoked, .pill.expired { background: var(--danger-bg); color: var(--danger); }
     .empty { text-align: center; padding: 1.75rem 1rem; color: var(--muted); border: 1px dashed var(--border); border-radius: 10px; }
     .empty b { display: block; color: var(--text); margin-bottom: .25rem; }
@@ -132,7 +132,7 @@ INDEX_HTML = r"""<!doctype html>
     .error-text { color: var(--danger); font-size: .9rem; margin-top: .6rem; min-height: 1.2em; }
     @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
     @media (max-width: 520px) { .who strong { max-width: 14ch; } .item .actions { width: 100%; } .item .actions .btn { flex: 1; } }
-      #auth .card > h2, #auth .card > p { text-align: center; }
+      #auth .card > h2, #auth .card > p, #portal-auth .card > h2, #portal-auth .card > p { text-align: center; }
     .divider { display: flex; align-items: center; gap: .75rem; color: var(--muted); font-size: .85rem; margin: 1.25rem 0 .9rem; }
     .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
     .demo-btn { width: 100%; }
@@ -182,6 +182,21 @@ INDEX_HTML = r"""<!doctype html>
       <div class="divider" aria-hidden="true"><span>or</span></div>
       <button class="btn secondary demo-btn" id="demo" type="button">Try the demo</button>
       <p class="field-hint" id="demo-hint">Creates a private demo account with sample data. No email needed.</p>
+      <p class="field-hint" style="text-align:center;margin-top:.75rem"><button class="btn link" id="to-portal" type="button">I'm a trusted contact</button></p>
+    </div>
+  </section>
+
+  <section id="portal-auth" class="hidden" aria-labelledby="pa-title">
+    <div class="card" style="max-width:480px;margin-inline:auto">
+      <h2 id="pa-title">Trusted contact access</h2>
+      <p class="muted">Enter the invite token the owner gave you. You'll only see what they chose to share with you.</p>
+      <form id="portal-auth-form" novalidate>
+        <label for="pt-token">Invite token</label>
+        <input id="pt-token" type="password" autocomplete="off" spellcheck="false">
+        <p class="error-text" role="alert" data-error></p>
+        <button class="btn block" type="submit">Continue</button>
+      </form>
+      <p style="text-align:center;margin-top:1rem"><button class="btn link" id="portal-back" type="button">Back to sign in</button></p>
     </div>
   </section>
 
@@ -262,11 +277,17 @@ INDEX_HTML = r"""<!doctype html>
       </div>
     </div>
   </section>
+
+  <section id="portal" class="hidden" aria-label="Trusted contact portal">
+    <div class="card" id="p-approve-card"><div class="card-head"><div><h3>Waiting for your approval</h3><p class="muted">Only approve if you're sure this person should see the item.</p></div></div><ul class="list" id="p-approve"></ul></div>
+    <div class="card"><div class="card-head"><div><h3>Shared with you</h3><p class="muted">Asking for access never opens anything by itself. It needs approval first.</p></div></div><ul class="list" id="p-items"></ul></div>
+    <div class="card"><div class="card-head"><h3>Your requests</h3><button class="btn secondary small" id="p-reload" type="button">Refresh</button></div><ul class="list" id="p-mine"></ul></div>
+  </section>
 </main>
 <footer><div class="wrap">Trusted Access is a prototype and has not had a professional security review. Don't store anything you can't afford to lose.</div></footer>
 
 <dialog id="confirm" aria-labelledby="confirm-title"><form method="dialog"><h3 id="confirm-title"></h3><p class="muted" id="confirm-body"></p><div class="row end"><button class="btn secondary" value="cancel">Cancel</button><button class="btn" id="confirm-ok" value="ok">Confirm</button></div></form></dialog>
-<dialog id="token-dialog" aria-labelledby="token-title"><h3 id="token-title">Contact invite created</h3><p class="muted">Give this token to your contact through a secure channel. It is shown only once. Treat it like a password.</p><pre id="token-value"></pre><div class="row end"><button class="btn secondary" id="token-copy" type="button">Copy</button><button class="btn" id="token-close" type="button">Done</button></div></dialog>
+<dialog id="token-dialog" aria-labelledby="token-title"><h3 id="token-title">Contact invite created</h3><p class="muted">Give this token to your contact through a secure channel. It is shown only once. Treat it like a password.</p><pre id="token-value"></pre><div class="row end"><button class="btn secondary" id="token-open" type="button">Open contact view</button><button class="btn secondary" id="token-copy" type="button">Copy</button><button class="btn" id="token-close" type="button">Done</button></div></dialog>
 <dialog id="policy-dialog" aria-labelledby="policy-title"><form id="policy-form"><h3 id="policy-title">Sharing rules</h3><p class="muted" id="policy-item"></p>
   <label for="p-mode">Who can request access</label>
   <select id="p-mode" name="access_mode"><option value="specific_contacts">Specific contacts</option><option value="emergency_only">Emergency only</option><option value="time_limited">Time-limited</option></select>
@@ -287,11 +308,13 @@ INDEX_HTML = r"""<!doctype html>
   <label for="e-text">Private text</label><textarea id="e-text"></textarea><p class="field-hint" id="e-hint"></p>
   <p class="error-text" role="alert" id="edit-error"></p>
   <div class="row end"><button class="btn secondary" type="button" id="edit-cancel">Cancel</button><button class="btn" type="submit">Save changes</button></div></form></dialog>
+<dialog id="grant-dialog" aria-labelledby="grant-title"><h3 id="grant-title"></h3><p class="muted" id="grant-meta"></p><div class="revealed" id="grant-body"></div><div class="row end"><button class="btn" type="button" id="grant-close">Close</button></div></dialog>
 <div id="toasts" aria-live="polite" aria-atomic="false"></div>
 
 <script>
 const $ = (id) => document.getElementById(id);
-const state = { token: sessionStorage.getItem("trustedAccessToken"), items: [], contacts: [], requests: [], grants: [] };
+const CONTACT_KEY = "trustedAccessContactToken";
+const state = { token: sessionStorage.getItem("trustedAccessToken"), contactToken: sessionStorage.getItem(CONTACT_KEY), items: [], contacts: [], requests: [], grants: [] };
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const LABELS = {
   trusted_contact_created: "Trusted contact added", access_policy_changed: "Sharing rules changed", vault_item_created: "Vault item saved",
@@ -322,11 +345,14 @@ function toast(text, error = false) {
 }
 async function api(path, options = {}) {
   options.headers = { "Content-Type": "application/json", ...(options.headers || {}) };
-  if (state.token) options.headers["X-Session-Token"] = state.token;
+  const asContact = !!options.contact; delete options.contact;
+  if (asContact) options.headers["X-Contact-Token"] = state.contactToken;
+  else if (state.token) options.headers["X-Session-Token"] = state.token;
   let response;
   try { response = await fetch(path, options); } catch { throw new Error("Can't reach the server. Check your connection and try again."); }
   const body = await response.json().catch(() => ({}));
-  if (response.status === 401 && state.token) { signOut("Your session expired. Please sign in again."); throw new Error("Session expired"); }
+  if (response.status === 401 && asContact && state.contactToken) { portalSignOut("Your access link expired. Ask the owner for a new invite."); throw new Error("Session expired"); }
+  if (response.status === 401 && !asContact && state.token) { signOut("Your session expired. Please sign in again."); throw new Error("Session expired"); }
   if (!response.ok) {
     const d = body.detail;
     throw new Error(typeof d === "string" ? d : Array.isArray(d) ? d.map(x => x.msg).join("; ") : "Something went wrong. Please try again.");
@@ -349,8 +375,9 @@ function confirmDialog(title, body, okText, danger = false) {
 /* Encryption: AES-GCM, key stays in this browser. */
 const b64 = (bytes) => { let bin = ""; for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(bin); };
 const unb64 = (s) => Uint8Array.from(atob(s), c => c.charCodeAt(0));
-async function encryptionKey() {
+async function encryptionKey(create = true) {
   let encoded = localStorage.getItem("trustedAccessDemoKey");
+  if (!encoded && !create) throw new Error("No encryption key in this browser");
   if (!encoded) { encoded = b64(crypto.getRandomValues(new Uint8Array(32))); localStorage.setItem("trustedAccessDemoKey", encoded); }
   return crypto.subtle.importKey("raw", unb64(encoded), "AES-GCM", false, ["encrypt", "decrypt"]);
 }
@@ -362,7 +389,7 @@ async function encrypt(text) {
 async function decrypt(blob) {
   const [v, iv, data] = String(blob).split(":");
   if (v !== "v1" || !iv || !data) throw new Error("Unsupported format");
-  const out = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(iv) }, await encryptionKey(), unb64(data));
+  const out = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(iv) }, await encryptionKey(false), unb64(data));
   return new TextDecoder().decode(out);
 }
 
@@ -404,13 +431,14 @@ async function refresh() {
   const [items, contacts, requests, grants, audit, me] = await Promise.all([api("/vault/items"), api("/trusted-contacts"), api("/access-requests"), api("/access-grants"), api("/audit-events"), api("/auth/me")]);
   Object.assign(state, { items, contacts, requests, grants });
   $("identity").textContent = me.email; $("identity").title = me.email;
-  $("demo-pill").classList.toggle("hidden", !isDemoEmail(me.email));
+  $("demo-pill").textContent = "Demo"; $("demo-pill").classList.toggle("hidden", !isDemoEmail(me.email));
   render(); renderAudit(audit);
 }
 
 /* Navigation */
 function signedIn(on) {
   $("auth").classList.toggle("hidden", on); $("dashboard").classList.toggle("hidden", !on); $("who").classList.toggle("hidden", !on);
+  $("portal").classList.add("hidden"); $("portal-auth").classList.add("hidden");
 }
 function showDashboard() { signedIn(true); skeleton(); refresh().catch(e => { if (e.message !== "Session expired") toast(e.message, true); }); }
 function signOut(msg) {
@@ -510,6 +538,7 @@ $("demo").onclick = (e) => busy(e.currentTarget, async () => {
 });
 updateDemoButton();
 $("logout").onclick = async (e) => {
+  if (state.contactToken) { await busy(e.currentTarget, () => api("/contact/logout", { method: "POST", contact: true }).catch(() => {})); return portalSignOut(); }
   // End the session on the server too, so a copied token stops working. Sign out locally even if that fails.
   await busy(e.currentTarget, () => api("/auth/logout", { method: "POST" }).catch(() => {}));
   signOut();
@@ -555,6 +584,19 @@ document.addEventListener("click", async (e) => {
     } else if (d.approve) {
       if (!await confirmDialog("Approve this request?", "The contact will be able to see the item you shared. You can revoke access later.", "Approve")) return;
       await busy(b, () => api("/access-requests/" + d.approve + "/approve", { method: "POST" })); toast("Request approved."); await refresh();
+    } else if (d.request) {
+      await busy(b, () => api("/access-requests", { method: "POST", contact: true, body: JSON.stringify({ item_id: d.request }) }));
+      toast("Request sent. The owner or other trusted contacts must approve it."); await refreshPortal();
+    } else if (d.capprove) {
+      if (!await confirmDialog("Approve this request?", "Only approve if you're sure " + d.who + " should see “" + d.title + "”. This can't be undone, though the owner can still revoke access.", "Approve")) return;
+      const r = await busy(b, () => api("/access-requests/" + d.capprove + "/contact-approve", { method: "POST", contact: true }));
+      toast(r.grant_id ? "Approved. Access has been granted." : "Approved. More approvals are needed."); await refreshPortal();
+    } else if (d.gview) {
+      const g = await busy(b, () => api("/access-grants/" + d.gview, { contact: true }));
+      $("grant-title").textContent = g.title; $("grant-meta").textContent = g.category + " · access ends " + (parseDate(g.expires_at) ? parseDate(g.expires_at).toLocaleString() : "soon");
+      try { $("grant-body").textContent = await decrypt(g.ciphertext); }
+      catch { $("grant-body").textContent = "This item is end-to-end encrypted, and this browser doesn't hold the key. Sharing decryption keys between people isn't built into this prototype yet."; }
+      $("grant-dialog").showModal();
     } else if (d.edit) {
       editItem = state.items.find(i => i.id === d.edit);
       $("e-category").innerHTML = $("v-category").innerHTML; $("e-category").value = editItem.category;
@@ -608,6 +650,64 @@ $("token-copy").onclick = async (e) => {
     toast("Couldn't copy automatically. The token is selected: press Ctrl/Cmd+C.", true);
   }
 };
+/* Trusted contact portal: read-only metadata plus the request/approve/view workflow. */
+const pstate = { me: null, items: [], mine: [], toApprove: [] };
+let pollTimer = null;
+const PSTATUS = { pending: "pending", owner_approved: "owner approved", rejected: "rejected", active: "access active", revoked: "revoked", expired: "expired" };
+const reqState = (r) => r.grant_active ? "active" : r.grant_revoked_at ? "revoked" : r.grant_id ? "expired" : r.status;
+const isOpen = (r) => r.status === "pending" || r.status === "owner_approved";
+function renderPortal() {
+  const items = pstate.items.map(i => {
+    const active = pstate.mine.some(r => r.vault_item_id === i.id && r.grant_active), open = pstate.mine.some(r => r.vault_item_id === i.id && isOpen(r));
+    const action = active ? `<span class="pill active">Access active</span>` : open ? `<span class="pill pending">Request pending</span>`
+      : `<button class="btn small" data-request="${esc(i.id)}" type="button">Request access</button>`;
+    return `<li class="item"><div class="main"><div class="title">${esc(i.title)}</div><div class="muted"><span class="pill">${esc(i.category)}</span>${i.required_approvals > 1 ? " · needs " + esc(i.required_approvals) + " approvals" : ""}</div></div><div class="actions">${action}</div></li>`;
+  });
+  $("p-items").innerHTML = items.join("") || empty("Nothing shared with you yet", "When an owner shares an item with you, it will appear here.");
+  $("p-mine").innerHTML = pstate.mine.map(r => {
+    const st = reqState(r);
+    const note = isOpen(r) ? (r.required_approvals > 1 ? ` · ${esc(r.approvals)} of ${esc(r.required_approvals)} approvals` : " · waiting for approval") : st === "active" ? ` · access ends ${when(r.grant_expires_at)}` : "";
+    return `<li class="item"><div class="main"><div class="title">${esc(r.item_title)}</div><div class="muted"><span class="pill ${esc(st)}">${esc(PSTATUS[st] || st)}</span> · ${when(r.requested_at)}${note}</div></div>${st === "active" ? `<div class="actions"><button class="btn small" data-gview="${esc(r.grant_id)}" type="button">View item</button></div>` : ""}</li>`;
+  }).join("") || empty("No requests yet", "Requests you make will show up here.");
+  $("p-approve-card").classList.toggle("hidden", !pstate.toApprove.length);
+  $("p-approve").innerHTML = pstate.toApprove.map(r => `<li class="item"><div class="main"><div class="title">${esc(r.requester_name)} is asking for “${esc(r.item_title)}”</div><div class="muted">${when(r.requested_at)} · ${esc(r.approvals)} of ${esc(r.required_approvals)} approval${r.required_approvals === 1 ? "" : "s"}</div></div><div class="actions"><button class="btn small" data-capprove="${esc(r.id)}" data-who="${esc(r.requester_name)}" data-title="${esc(r.item_title)}" type="button">Approve</button></div></li>`).join("");
+}
+async function refreshPortal() {
+  const [me, items, reqs] = await Promise.all([api("/contact/me", { contact: true }), api("/contact/items", { contact: true }), api("/contact/requests", { contact: true })]);
+  Object.assign(pstate, { me, items, mine: reqs.mine, toApprove: reqs.to_approve });
+  $("identity").textContent = me.name + " (" + me.relationship + ")"; $("identity").title = me.name;
+  $("demo-pill").textContent = "Contact"; $("demo-pill").classList.remove("hidden");
+  renderPortal();
+}
+function showPortal() {
+  for (const id of ["auth", "dashboard", "portal-auth"]) $(id).classList.add("hidden");
+  $("portal").classList.remove("hidden"); $("who").classList.remove("hidden");
+  for (const id of ["p-items", "p-mine"]) $(id).innerHTML = '<li class="skeleton" aria-hidden="true"></li>'.repeat(2);
+  $("p-approve-card").classList.add("hidden");
+  refreshPortal().catch(e => { if (e.message !== "Session expired") toast(e.message, true); });
+  clearInterval(pollTimer); pollTimer = setInterval(() => { if (!document.hidden && state.contactToken) refreshPortal().catch(() => {}); }, 20000);
+}
+function portalSignOut(msg) {
+  sessionStorage.removeItem(CONTACT_KEY); state.contactToken = null; clearInterval(pollTimer);
+  Object.assign(pstate, { me: null, items: [], mine: [], toApprove: [] }); signOut(msg);
+}
+async function startPortal(token) {
+  if (state.token) throw new Error("Sign out of your owner account first.");
+  await api("/contact/me", { headers: { "X-Contact-Token": token } });
+  state.contactToken = token; sessionStorage.setItem(CONTACT_KEY, token); showPortal();
+}
+$("to-portal").onclick = () => { $("auth").classList.add("hidden"); $("portal-auth").classList.remove("hidden"); $("pt-token").focus(); };
+$("portal-back").onclick = () => { $("portal-auth").classList.add("hidden"); $("auth").classList.remove("hidden"); };
+$("portal-auth-form").onsubmit = async (e) => {
+  e.preventDefault(); const err = e.target.querySelector("[data-error]"), token = $("pt-token").value.trim(); err.textContent = "";
+  if (!token) return void (err.textContent = "Enter your invite token.");
+  try { await busy(e.submitter, () => startPortal(token)); $("pt-token").value = ""; } catch (x) { err.textContent = x.message; }
+};
+$("pt-token").addEventListener("input", () => $("portal-auth-form").querySelector("[data-error]").textContent = "");
+$("p-reload").onclick = (e) => busy(e.currentTarget, () => refreshPortal().then(() => toast("Up to date.")).catch(x => { if (x.message !== "Session expired") toast(x.message, true); }));
+$("grant-close").onclick = () => $("grant-dialog").close();
+$("token-open").onclick = () => window.open(location.origin + "/#contact=" + $("token-value").textContent.trim(), "_blank", "noopener");
+
 /* Backup encryption: the whole payload is encrypted in this browser with a passphrase the server never sees. */
 const BACKUP_AAD = new TextEncoder().encode("trusted-access-backup:2");
 const KDF = { iterations: 600000, min: 100000, max: 2000000 };
@@ -755,7 +855,14 @@ $("import-go").onclick = async (e) => {
   }
   resetImport(); if (state.token) await refresh().catch(() => {});
 };
-if (state.token) showDashboard();
+(() => {
+  const frag = location.hash.match(/^#contact=([A-Za-z0-9_-]{20,100})$/);
+  if (frag) {
+    history.replaceState(null, "", location.pathname + location.search);
+    startPortal(frag[1]).catch(x => { toast(x.message, true); });
+  } else if (state.token) showDashboard();
+  else if (state.contactToken) showPortal();
+})();
 </script>
 </body>
 </html>"""

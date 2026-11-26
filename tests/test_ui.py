@@ -87,3 +87,16 @@ def test_dashboard_supports_editing_deleting_and_server_logout(tmp_path) -> None
     assert 'id="edit-dialog"' in html
     assert "data-del-item" in html and "data-del-contact" in html
     assert 'api("/auth/logout"' in html
+
+
+def test_dashboard_includes_the_trusted_contact_portal(tmp_path) -> None:
+    app.state.database_path = tmp_path / "ui.sqlite3"
+    html = TestClient(app).get("/").text
+
+    assert "I'm a trusted contact" in html
+    assert 'id="portal"' in html and "Waiting for your approval" in html
+    assert 'api("/contact/requests"' in html and "contact-approve" in html
+    # Invite links carry the token in the URL fragment, which is never sent to the server.
+    assert "#contact=" in html
+    # Viewing a grant must not create an encryption key as a side effect.
+    assert "encryptionKey(false)" in html
