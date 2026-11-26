@@ -133,6 +133,11 @@ INDEX_HTML = r"""<!doctype html>
     @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
     @media (max-width: 520px) { .who strong { max-width: 14ch; } .item .actions { width: 100%; } .item .actions .btn { flex: 1; } }
       #auth .card > h2, #auth .card > p { text-align: center; }
+    .divider { display: flex; align-items: center; gap: .75rem; color: var(--muted); font-size: .85rem; margin: 1.25rem 0 .9rem; }
+    .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+    .demo-btn { width: 100%; }
+    #demo-hint { text-align: center; margin-top: .6rem; }
+    .pill.demo { background: var(--primary); color: var(--on-primary); margin-right: .4rem; }
   </style>
 </head>
 <body>
@@ -142,7 +147,7 @@ INDEX_HTML = r"""<!doctype html>
     <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#2457d6"/><path d="M16 6l8 3v6c0 5-3.4 8.6-8 11-4.6-2.4-8-6-8-11V9z" fill="#fff"/></svg>
     <div><h1>Trusted Access</h1><small>Emergency information sharing prototype</small></div>
   </div>
-  <div class="who hidden" id="who"><span>Signed in as <strong id="identity"></strong></span><button class="btn secondary small" id="logout" type="button">Sign out</button></div>
+  <div class="who hidden" id="who"><span><span class="pill demo hidden" id="demo-pill">Demo</span>Signed in as <strong id="identity"></strong></span><button class="btn secondary small" id="logout" type="button">Sign out</button></div>
 </div></header>
 
 <main id="content" class="wrap" tabindex="-1">
@@ -174,6 +179,9 @@ INDEX_HTML = r"""<!doctype html>
         <p class="error-text" role="alert" data-error></p>
         <button class="btn block" type="submit">Create account</button>
       </form>
+      <div class="divider" aria-hidden="true"><span>or</span></div>
+      <button class="btn secondary demo-btn" id="demo" type="button">Try the demo</button>
+      <p class="field-hint" id="demo-hint">Creates a private demo account with sample data. No email needed.</p>
     </div>
   </section>
 
@@ -354,6 +362,7 @@ async function refresh() {
   const [items, contacts, requests, audit, me] = await Promise.all([api("/vault/items"), api("/trusted-contacts"), api("/access-requests"), api("/audit-events"), api("/auth/me")]);
   Object.assign(state, { items, contacts, requests });
   $("identity").textContent = me.email; $("identity").title = me.email;
+  $("demo-pill").classList.toggle("hidden", !isDemoEmail(me.email));
   render(); renderAudit(audit);
 }
 
@@ -364,7 +373,7 @@ function signedIn(on) {
 function showDashboard() { signedIn(true); skeleton(); refresh().catch(e => { if (e.message !== "Session expired") toast(e.message, true); }); }
 function signOut(msg) {
   sessionStorage.removeItem("trustedAccessToken"); state.token = null; Object.assign(state, { items: [], contacts: [], requests: [] });
-  signedIn(false); document.querySelectorAll("form").forEach(f => f.reset()); if (msg) toast(msg, true);
+  signedIn(false); document.querySelectorAll("form").forEach(f => f.reset()); updateDemoButton(); if (msg) toast(msg, true);
 }
 function setupTabs(list) {
   const tabs = [...list.querySelectorAll("[role=tab]")];
@@ -413,6 +422,51 @@ document.querySelectorAll("[data-toggle-pw]").forEach(b => b.onclick = () => {
   const input = b.parentElement.querySelector("input"), show = input.type === "password";
   input.type = show ? "text" : "password"; b.textContent = show ? "Hide" : "Show"; b.setAttribute("aria-pressed", show); b.setAttribute("aria-label", show ? "Hide password" : "Show password");
 });
+/* Demo account: random credentials generated in this browser, no shared or built-in login. */
+const DEMO_KEY = "trustedAccessDemoLogin";
+const isDemoEmail = (e) => /^demo-[0-9a-f]{8}@demo\.example$/.test(e);
+const randomHex = (n) => [...crypto.getRandomValues(new Uint8Array(n))].map(b => b.toString(16).padStart(2, "0")).join("");
+function savedDemo() {
+  try { const c = JSON.parse(localStorage.getItem(DEMO_KEY)); return c && isDemoEmail(c.email) && typeof c.password === "string" ? c : null; } catch { return null; }
+}
+function updateDemoButton() {
+  const has = !!savedDemo();
+  $("demo").textContent = has ? "Continue with demo account" : "Try the demo";
+  $("demo-hint").textContent = has ? "Signs you back in to the demo account saved in this browser." : "Creates a private demo account with sample data. No email needed.";
+}
+async function seedDemo() {
+  const notes = [
+    ["Medical", "Allergies and medication", "Allergic to penicillin.\nDaily: 10mg lisinopril (morning).\nBlood type: O+."],
+    ["Insurance", "Health insurance", "Provider: Example Health\nMember ID: DEMO-000-000\nClaims line: 555-0100"],
+    ["Pets", "Biscuit's care", "Feed twice daily. Vet: Riverside Animal Clinic, 555-0123."],
+  ];
+  const ids = [];
+  for (const [category, title, text] of notes)
+    ids.push((await api("/vault/items", { method: "POST", body: JSON.stringify({ category, title, ciphertext: await encrypt(text) }) })).item_id);
+  const people = [["Alex Morgan", "Sister", "alex@example.com"], ["Dr. Priya Shah", "Family doctor", "555-0147"]];
+  const contactIds = [];
+  for (const [name, relationship, contact_method] of people)
+    contactIds.push((await api("/trusted-contacts", { method: "POST", body: JSON.stringify({ name, relationship, contact_method }) })).contact_id);
+  await api("/vault/items/" + ids[0] + "/policy", { method: "PUT", body: JSON.stringify({ access_mode: "emergency_only", contact_ids: contactIds, required_approvals: 1 }) });
+}
+async function startSession(path, creds) {
+  const r = await api(path, { method: "POST", body: JSON.stringify(creds) });
+  state.token = r.session_token; sessionStorage.setItem("trustedAccessToken", state.token);
+}
+$("demo").onclick = (e) => busy(e.currentTarget, async () => {
+  try {
+    let creds = savedDemo();
+    if (creds) { try { await startSession("/auth/login", creds); } catch { creds = null; } }
+    if (!creds) {
+      creds = { email: "demo-" + randomHex(4) + "@demo.example", password: randomHex(16) };
+      await startSession("/auth/register", creds);
+      try { await seedDemo(); } catch (x) { toast("Demo account created, but sample data failed: " + x.message, true); }
+      localStorage.setItem(DEMO_KEY, JSON.stringify(creds));
+    }
+    toast("Welcome to the demo!"); showDashboard();
+  } catch (x) { if (x.message !== "Session expired") toast(x.message, true); }
+});
+updateDemoButton();
 $("logout").onclick = () => signOut();
 $("reload").onclick = (e) => busy(e.currentTarget, () => refresh().then(() => toast("Up to date.")).catch(x => toast(x.message, true)));
 

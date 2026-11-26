@@ -34,3 +34,13 @@ def test_dashboard_is_accessible_and_responsive(tmp_path) -> None:
     assert 'role="tablist"' in html
     assert "prefers-color-scheme: dark" in html
     assert "prefers-reduced-motion" in html
+
+
+def test_dashboard_offers_demo_login_without_builtin_credentials(tmp_path) -> None:
+    app.state.database_path = tmp_path / "ui.sqlite3"
+    html = TestClient(app).get("/").text
+
+    assert 'id="demo"' in html
+    assert "Try the demo" in html
+    assert "crypto.getRandomValues" in html
+    assert "@demo.example" in html
