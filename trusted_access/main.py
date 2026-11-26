@@ -1,5 +1,7 @@
 from pathlib import Path
+import hashlib
 import os
+import time
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
@@ -34,6 +36,29 @@ def database():
         yield connection
     finally:
         connection.close()
+
+
+# Failed-login throttling is per process and per email address. It slows online
+# password guessing; it is not a substitute for a shared rate limiter in a real
+# deployment, and it lets someone lock out a known email for the window.
+LOGIN_WINDOW_SECONDS = 15 * 60
+LOGIN_MAX_FAILURES = 10
+LOGIN_TRACKED_LIMIT = 10_000
+_login_failures: dict[str, list[float]] = {}
+
+
+def _recent_failures(email: str) -> list[float]:
+    cutoff = time.monotonic() - LOGIN_WINDOW_SECONDS
+    recent = [moment for moment in _login_failures.get(email, []) if moment > cutoff]
+    if recent:
+        _login_failures[email] = recent
+    else:
+        _login_failures.pop(email, None)
+    return recent
+
+
+def reset_login_throttle() -> None:
+    _login_failures.clear()
 
 
 class RegisterRequest(BaseModel):
@@ -73,13 +98,36 @@ def register(request: RegisterRequest, connection=Depends(database)) -> dict[str
 
 @app.post("/auth/login", tags=["authentication"])
 def login(request: LoginRequest, connection=Depends(database)) -> dict[str, str]:
+    email = normalized_email(request.email)
+    if len(_recent_failures(email)) >= LOGIN_MAX_FAILURES:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed sign-in attempts. Please wait a few minutes and try again.",
+        )
     row = connection.execute(
         "SELECT id, password_hash FROM users WHERE email = ?",
-        (normalized_email(request.email),),
+        (email,),
     ).fetchone()
     if row is None or not verify_password(request.password, row["password_hash"]):
+        if len(_login_failures) < LOGIN_TRACKED_LIMIT or email in _login_failures:
+            _login_failures.setdefault(email, []).append(time.monotonic())
         raise HTTPException(status_code=401, detail="Invalid email or password")
+    _login_failures.pop(email, None)
     return {"session_token": create_session(connection, row["id"])}
+
+
+@app.post("/auth/logout", tags=["authentication"])
+def logout(
+    x_session_token: Optional[str] = Header(default=None),
+    connection=Depends(database),
+) -> dict[str, str]:
+    if x_session_token:
+        connection.execute(
+            "DELETE FROM sessions WHERE token_hash = ?",
+            (hashlib.sha256(x_session_token.encode("utf-8")).hexdigest(),),
+        )
+        connection.commit()
+    return {"status": "signed_out"}
 
 
 @app.get("/auth/me", tags=["authentication"])
