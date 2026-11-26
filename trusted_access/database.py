@@ -102,7 +102,9 @@ CREATE TABLE IF NOT EXISTS audit_events (
 
 
 def connect(database_path: Path) -> sqlite3.Connection:
-    connection = sqlite3.connect(database_path)
+    # Each request owns its connection, but FastAPI may resolve its sync
+    # dependencies on different worker threads, so allow cross-thread use.
+    connection = sqlite3.connect(database_path, check_same_thread=False)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     connection.executescript(SCHEMA)

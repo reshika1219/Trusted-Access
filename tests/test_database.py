@@ -47,3 +47,25 @@ def test_database_rejects_orphan_vault_item(tmp_path) -> None:
         pass
     else:
         raise AssertionError("orphan vault item was accepted")
+
+
+def test_connection_can_be_used_from_another_thread(tmp_path) -> None:
+    import threading
+
+    from trusted_access.database import connect
+
+    connection = connect(tmp_path / "threads.sqlite3")
+    errors = []
+
+    def query() -> None:
+        try:
+            connection.execute("SELECT 1").fetchone()
+        except Exception as error:  # pragma: no cover - failure path
+            errors.append(error)
+
+    thread = threading.Thread(target=query)
+    thread.start()
+    thread.join()
+    connection.close()
+
+    assert errors == []
