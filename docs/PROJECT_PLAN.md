@@ -2,30 +2,38 @@
 
 ## Current state
 
-The repository started empty: there were no source files, commits, branches,
-framework configuration, database schema, tests, or existing functionality.
-This first change establishes the project contract and research baseline.
+The first vertical slice and most of the original plan are implemented and
+tested (see the README for features). Status against the minimal order:
 
-## Minimal implementation order
+1. Stack and boundaries: done (Python, FastAPI, SQLite, client-side encryption).
+2. Schema and encrypted record format: done (`v1:<iv>:<ciphertext>`, AES-GCM).
+3. Local authentication and encrypted text records: done, including edit and
+   delete, server-side logout, and failed-login throttling.
+4. Trusted contacts and per-item permission checks: done. Policies are replaced
+   on save and narrowing them revokes access immediately.
+5. Owner-approved, temporary, read-only grants: done (fixed one-hour expiry).
+6. Multi-party approvals, revocation, audit views: done. Requesters cannot
+   approve their own requests. Waiting periods are **not** implemented.
+7. Encrypted export/import: done (whole-payload passphrase encryption). File
+   attachments remain deferred.
+8. Notifications, recovery UX, threat-model review, security testing:
+   partially done. There are no notifications and no recovery key. The threat
+   model is current but has not had a professional review.
 
-1. Confirm the application stack, deployment boundary, key-management model,
-   and development authentication approach.
-2. Define the initial schema and encrypted vault-record format.
-3. Implement local authentication and encrypted text records.
-4. Add trusted contacts and per-item permission checks.
-5. Add owner-approved, temporary, read-only access grants.
-6. Add multi-party approval rules, waiting periods, revocation, and audit
-   views.
-7. Add encrypted export/import and carefully validated file attachments.
-8. Add development notifications, recovery UX, threat-model review, and
-   security testing.
+A browser dashboard covers the owner and trusted-contact workflows.
 
-The current implementation has reached the recovery/export contract. The
-server deliberately does not decrypt imported backup payloads or promise key
-recovery; client-side decryption and validation remain required. The dashboard
-now encrypts the entire backup file in the browser with a user-chosen
-passphrase (see the backup section of the threat model) and validates files
-before restoring them.
+## Next steps
+
+1. **Decide key delivery.** Contacts cannot decrypt in a different browser.
+   Options include per-item keys wrapped for each contact, or secret sharing
+   (Shamir) across contacts. This changes the threat model, so it should be a
+   deliberate decision.
+2. Add a recovery key and a recovery flow for the browser key.
+3. Make `access_mode` real: waiting periods, time-limited windows, and
+   configurable grant lifetime.
+4. Development notifications (for example, email to a local sink).
+5. Validated file attachments.
+6. A professional security review before any claim of production security.
 
 ## First vertical slice
 
@@ -46,15 +54,12 @@ The first slice should demonstrate this complete path:
 - Client-side encryption; the server stores ciphertext only
 - File attachments are deferred until text records and permissions work
 
-## Decisions requiring confirmation
+## Decisions still requiring confirmation
 
-- Backend language and web framework
-- Database and deployment model
-- Whether encryption is performed entirely client-side or by a local trusted
-  application boundary for the prototype
-- Recovery-key and encrypted-export UX
+- How decryption keys reach trusted contacts (see next steps)
+- Recovery-key UX
 - Notification mechanism for development
-- Whether file attachments are deferred until text records are validated
+- Deployment model beyond a local prototype
 
 These decisions materially affect the threat model and should not be hidden
 behind an arbitrary default.

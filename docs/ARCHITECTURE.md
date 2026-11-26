@@ -22,3 +22,18 @@ boundary, not only in the user interface.
 The initial implementation should keep the storage and application boundaries
 replaceable so that a local prototype can later be evaluated against a
 zero-knowledge or client-side-encryption deployment model.
+
+## Current modules
+
+- `main.py`: app, owner authentication, throttling, security-header middleware
+- `vault.py`: encrypted vault items and the audit helper
+- `contacts.py`: trusted contacts, invites, sharing policies
+- `requests.py`: contact-authenticated access requests
+- `access.py`: approvals, grants, revocation, audit listing
+- `portal.py`: read-only views for a signed-in trusted contact
+- `backup.py`: export contract and import audit notice
+- `ui.py`: the single-page dashboard and its Content-Security-Policy
+- `database.py`: SQLite schema (foreign-key cascades end access on deletes)
+
+Owner and contact credentials are separate (`X-Session-Token` and
+`X-Contact-Token`), so a contact token can never act as an owner session.

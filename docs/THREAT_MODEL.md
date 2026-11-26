@@ -71,3 +71,33 @@ Known limits:
 - Imported files are untrusted: headers, KDF cost, record shapes, sizes, and
   counts are validated, and restored records are created through the normal
   authorised APIs.
+
+## Authorization and web hardening
+
+- Every endpoint authorises on the server. Owner resources are filtered by
+  owner, contact resources by the contact's policy membership. Other users'
+  resource IDs return 404.
+- A requester cannot approve their own access request, and a contact cannot hold
+  two open requests for the same item.
+- Saving a sharing policy replaces the old one. Narrowing or removing it rejects
+  open requests and revokes active grants of contacts no longer included.
+- Sign-out deletes the session on the server. Failed logins are throttled per
+  email (10 failures per 15 minutes). The throttle is in-memory, per process,
+  and lets someone lock out a known email for the window. A real deployment
+  needs a shared rate limiter.
+- The page is served with a Content-Security-Policy that allows only its own
+  inline script by hash, blocks inline event handlers and outside connections,
+  and forbids framing. A permissions policy disables camera, microphone and
+  geolocation. Responses are `no-store`. User content is escaped before it is
+  rendered.
+- Invite links carry the contact token in the URL fragment, which browsers do
+  not send to the server. The page removes it from the address bar on load.
+
+## Known gaps
+
+- Decryption keys are not shared between people, so a contact reads plaintext
+  only in a browser that holds the owner's key.
+- No recovery key, email verification, password reset, or two-factor sign-in.
+- Policy access modes are recorded but not yet enforced differently, and grants
+  always last one hour.
+- The SQLite database is not encrypted at rest.
