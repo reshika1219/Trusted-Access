@@ -328,7 +328,7 @@ function confirmDialog(title, body, okText, danger = false) {
 }
 
 /* Encryption: AES-GCM, key stays in this browser. */
-const b64 = (bytes) => btoa(String.fromCharCode(...bytes));
+const b64 = (bytes) => { let bin = ""; for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(bin); };
 const unb64 = (s) => Uint8Array.from(atob(s), c => c.charCodeAt(0));
 async function encryptionKey() {
   let encoded = localStorage.getItem("trustedAccessDemoKey");
