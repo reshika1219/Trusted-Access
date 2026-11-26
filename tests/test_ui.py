@@ -138,3 +138,16 @@ def test_sharing_dialog_prefills_rules_and_can_stop_sharing(tmp_path) -> None:
     assert 'id="policy-stop"' in html and "Stop sharing" in html
     assert '"/policy"))).policy' in html
     assert "access_policy_removed" in html
+
+
+def test_dashboard_delivers_keys_with_fingerprint_confirmation(tmp_path) -> None:
+    app.state.database_path = tmp_path / "ui.sqlite3"
+    html = TestClient(app).get("/").text
+
+    assert 'id="key-dialog"' in html and "The fingerprint matches" in html
+    assert "async function publishShare" in html and "syncShares" in html
+    assert 'name: "RSA-OAEP"' in html and "wrapKey" in html
+    # The per-share key is random and fresh for every publish.
+    assert 'generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt"])' in html
+    # Delivery only to contacts the owner confirmed.
+    assert "c.key_confirmed" in html

@@ -141,6 +141,7 @@ INDEX_HTML = r"""<!doctype html>
     .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
     .demo-btn { width: 100%; }
     #demo-hint { text-align: center; margin-top: .6rem; }
+    .fp { font-size: 1.1rem; text-align: center; letter-spacing: .06em; padding: 1rem; word-spacing: .4em; }
     .pill.demo { background: var(--primary); color: var(--on-primary); margin-right: .4rem; }
   </style>
 </head>
@@ -209,7 +210,7 @@ INDEX_HTML = r"""<!doctype html>
     <div class="stats" id="stats"></div>
     <div class="tabs" role="tablist" aria-label="Dashboard sections" id="dash-tabs">
       <button class="tab" role="tab" id="t-vault" aria-selected="true" aria-controls="p-vault" type="button">Vault</button>
-      <button class="tab" role="tab" id="t-contacts" aria-selected="false" aria-controls="p-contacts" type="button" tabindex="-1">Trusted contacts</button>
+      <button class="tab" role="tab" id="t-contacts" aria-selected="false" aria-controls="p-contacts" type="button" tabindex="-1">Trusted contacts<span class="badge hidden" id="key-badge"></span></button>
       <button class="tab" role="tab" id="t-requests" aria-selected="false" aria-controls="p-requests" type="button" tabindex="-1">Access requests<span class="badge hidden" id="req-badge"></span></button>
       <button class="tab" role="tab" id="t-audit" aria-selected="false" aria-controls="p-audit" type="button" tabindex="-1">Activity</button>
       <button class="tab" role="tab" id="t-backup" aria-selected="false" aria-controls="p-backup" type="button" tabindex="-1">Backup</button>
@@ -296,7 +297,7 @@ INDEX_HTML = r"""<!doctype html>
   <label for="p-mode">Who can request access</label>
   <select id="p-mode" name="access_mode"><option value="specific_contacts">Specific contacts</option><option value="emergency_only">Emergency only</option><option value="time_limited">Time-limited</option></select>
   <label id="p-contacts-label">Trusted contacts</label><div class="checks" id="p-contact-list" role="group" aria-labelledby="p-contacts-label"></div>
-  <label for="p-approvals">Approvals required</label><input id="p-approvals" name="required_approvals" type="number" min="1" value="1"><p class="field-hint">Cannot exceed the number of selected contacts.</p>
+  <label for="p-approvals">Approvals required</label><input id="p-approvals" name="required_approvals" type="number" min="1" value="1"><p class="field-hint">Cannot exceed the number of selected contacts. Contacts also need a confirmed encryption key to read the item.</p>
   <p class="error-text" role="alert" id="policy-error"></p>
   <div class="row end"><button class="btn danger ghost hidden" type="button" id="policy-stop" style="margin-right:auto">Stop sharing</button><button class="btn secondary" type="button" id="policy-cancel">Cancel</button><button class="btn" type="submit">Save rules</button></div></form></dialog>
 <dialog id="export-dialog" aria-labelledby="export-title"><form id="export-form" novalidate><h3 id="export-title">Protect your backup</h3>
@@ -312,13 +313,17 @@ INDEX_HTML = r"""<!doctype html>
   <label for="e-text">Private text</label><textarea id="e-text"></textarea><p class="field-hint" id="e-hint"></p>
   <p class="error-text" role="alert" id="edit-error"></p>
   <div class="row end"><button class="btn secondary" type="button" id="edit-cancel">Cancel</button><button class="btn" type="submit">Save changes</button></div></form></dialog>
+<dialog id="key-dialog" aria-labelledby="key-title"><h3 id="key-title"></h3>
+  <p class="muted">Ask your contact to open their link and read you the fingerprint shown there, using a channel you trust (a call, in person). Only confirm if it matches exactly. If it doesn't, someone may be intercepting the key.</p>
+  <pre class="fp" id="key-fp"></pre>
+  <div class="row end"><button class="btn secondary" type="button" id="key-cancel">Cancel</button><button class="btn" type="button" id="key-ok">The fingerprint matches</button></div></dialog>
 <dialog id="grant-dialog" aria-labelledby="grant-title"><h3 id="grant-title"></h3><p class="muted" id="grant-meta"></p><div class="revealed" id="grant-body"></div><div class="row end"><button class="btn" type="button" id="grant-close">Close</button></div></dialog>
 <div id="toasts" aria-live="polite" aria-atomic="false"></div>
 
 <script>
 const $ = (id) => document.getElementById(id);
 const CONTACT_KEY = "trustedAccessContactToken";
-const state = { token: sessionStorage.getItem("trustedAccessToken"), contactToken: sessionStorage.getItem(CONTACT_KEY), items: [], contacts: [], requests: [], grants: [] };
+const state = { token: sessionStorage.getItem("trustedAccessToken"), contactToken: sessionStorage.getItem(CONTACT_KEY), items: [], contacts: [], requests: [], grants: [], policies: [] };
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const LABELS = {
   trusted_contact_created: "Trusted contact added", access_policy_changed: "Sharing rules changed", vault_item_created: "Vault item saved",
@@ -326,7 +331,8 @@ const LABELS = {
   backup_exported: "Backup exported", access_requested: "Access requested", trusted_contact_invited: "Contact invite created",
   access_owner_approved: "Owner approved, awaiting contacts", access_granted: "Access granted", access_viewed: "Shared item viewed",
   backup_import_requested: "Backup import requested", vault_item_updated: "Vault item edited", vault_item_deleted: "Vault item deleted",
-  trusted_contact_deleted: "Trusted contact removed", access_policy_removed: "Sharing stopped",
+  trusted_contact_deleted: "Trusted contact removed", contact_key_registered: "Contact set up an encryption key",
+  contact_key_confirmed: "Contact key confirmed", item_share_published: "Shared copy delivered to contacts", access_policy_removed: "Sharing stopped",
 };
 const label = (t) => LABELS[t] || String(t).replace(/_/g, " ").replace(/^./, c => c.toUpperCase());
 function parseDate(s) { if (!s) return null; let v = String(s).replace(" ", "T"); if (!/[zZ]|[+-]\d\d:?\d\d$/.test(v)) v += "Z"; const d = new Date(v); return isNaN(d) ? null : d; }
@@ -385,17 +391,56 @@ async function encryptionKey(create = true) {
   if (!encoded) { encoded = b64(crypto.getRandomValues(new Uint8Array(32))); localStorage.setItem("trustedAccessDemoKey", encoded); }
   return crypto.subtle.importKey("raw", unb64(encoded), "AES-GCM", false, ["encrypt", "decrypt"]);
 }
-async function encrypt(text) {
+async function encryptWith(key, text) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const data = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await encryptionKey(), new TextEncoder().encode(text));
+  const data = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(text));
   return "v1:" + b64(iv) + ":" + b64(new Uint8Array(data));
 }
-async function decrypt(blob) {
+async function decryptWith(key, blob) {
   const [v, iv, data] = String(blob).split(":");
   if (v !== "v1" || !iv || !data) throw new Error("Unsupported format");
-  const out = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(iv) }, await encryptionKey(false), unb64(data));
+  const out = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(iv) }, key, unb64(data));
   return new TextDecoder().decode(out);
 }
+const encrypt = async (text) => encryptWith(await encryptionKey(), text);
+const decrypt = async (blob) => decryptWith(await encryptionKey(false), blob);
+
+/* Key delivery (WebCrypto only): each contact has an RSA-OAEP keypair that never leaves their browser. The owner
+   confirms its fingerprint, then encrypts a copy of an item under a fresh per-share key and wraps that key to each
+   confirmed contact. The server stores ciphertext and wrapped keys and can't read either. */
+const RSA_PARAMS = { name: "RSA-OAEP", modulusLength: 3072, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" };
+const keyHash = async (spkiB64) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", unb64(spkiB64)))].map(b => b.toString(16).padStart(2, "0")).join("");
+const fingerprint = async (spkiB64) => (await keyHash(spkiB64)).slice(0, 32).toUpperCase().match(/.{4}/g).join(" ");
+async function publishShare(itemId) {
+  const item = state.items.find(i => i.id === itemId), policy = state.policies.find(p => p.item_id === itemId);
+  if (!item || !policy) return null;
+  let plaintext; try { plaintext = await decrypt(item.ciphertext); } catch { return { undecryptable: true }; }
+  const shareKey = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt"]);
+  const keys = {};
+  for (const cid of policy.contact_ids) {
+    const c = state.contacts.find(x => x.id === cid);
+    if (!c || !c.public_key || !c.key_confirmed) continue;
+    try {
+      const pub = await crypto.subtle.importKey("spki", unb64(c.public_key), { name: "RSA-OAEP", hash: "SHA-256" }, false, ["wrapKey"]);
+      keys[cid] = { wrapped_key: b64(new Uint8Array(await crypto.subtle.wrapKey("raw", shareKey, pub, { name: "RSA-OAEP" }))), public_key_sha256: await keyHash(c.public_key) };
+    } catch { /* an unusable key is reported as pending below */ }
+  }
+  return api("/vault/items/" + itemId + "/share", { method: "PUT", body: JSON.stringify({ ciphertext: await encryptWith(shareKey, plaintext), keys }) });
+}
+/* Publish shares that are missing keys for contacts whose key is confirmed. Needs fresh state from refresh(). */
+async function syncShares({ only = null } = {}) {
+  const results = {};
+  for (const p of state.policies) {
+    if (only && !only.includes(p.item_id)) continue;
+    const ready = p.contact_ids.filter(cid => { const c = state.contacts.find(x => x.id === cid); return c && c.public_key && c.key_confirmed; });
+    if (!ready.some(cid => !p.delivered_contact_ids.includes(cid))) { results[p.item_id] = { delivered: [], pending: p.contact_ids.filter(c => !p.delivered_contact_ids.includes(c)) }; continue; }
+    try { results[p.item_id] = await publishShare(p.item_id); } catch (e) { if (e.message === "Session expired") throw e; results[p.item_id] = { failed: e.message }; }
+  }
+  if (Object.values(results).some(r => r && r.delivered && r.delivered.length)) await refresh();
+  return results;
+}
+const shareSummary = (r) => !r ? "" : r.undecryptable ? " This item can't be decrypted in this browser, so contacts can't read it." : r.failed ? " Keys couldn't be delivered: " + r.failed
+  : (r.delivered.length ? " Keys delivered to " + plural(r.delivered.length, "contact", "contacts") + "." : "") + (r.pending.length ? " " + plural(r.pending.length, "contact still needs", "contacts still need") + " to set up and confirm a key." : "");
 
 /* Rendering */
 const empty = (title, hint) => `<li class="empty"><b>${esc(title)}</b>${esc(hint)}</li>`;
@@ -406,11 +451,17 @@ function render() {
     `<div class="stat"><b>${state.contacts.length}</b><span>Trusted contacts</span></div>` +
     `<div class="stat ${pending.length ? "alert" : ""}"><b>${pending.length}</b><span>Pending requests</span></div>`;
   const badge = $("req-badge"); badge.textContent = pending.length; badge.classList.toggle("hidden", !pending.length);
-  $("items").innerHTML = state.items.map(i => `<li class="item"><div class="main"><div class="title">${esc(i.title)}</div><div class="muted"><span class="pill">${esc(i.category)}</span> · ${when(i.created_at)}</div></div>
+  const shareNote = (i) => { const p = state.policies.find(x => x.item_id === i.id); if (!p) return ""; const n = p.contact_ids.length, k = p.delivered_contact_ids.length;
+    return ` · <span class="pill ${k === n ? "active" : "pending"}" title="Keys delivered to ${k} of ${n}">Shared with ${n}</span>${k < n ? " · keys for " + k + " of " + n : ""}`; };
+  $("items").innerHTML = state.items.map(i => `<li class="item"><div class="main"><div class="title">${esc(i.title)}</div><div class="muted"><span class="pill">${esc(i.category)}</span> · ${when(i.created_at)}${shareNote(i)}</div></div>
     <div class="actions"><button class="btn secondary small" data-reveal="${esc(i.id)}" type="button">View</button><button class="btn secondary small" data-policy="${esc(i.id)}" type="button">Sharing</button><button class="btn secondary small" data-edit="${esc(i.id)}" type="button">Edit</button><button class="btn danger ghost small" data-del-item="${esc(i.id)}" type="button">Delete</button></div><div class="revealed hidden" id="rev-${esc(i.id)}" tabindex="-1"></div></li>`).join("")
     || empty("Your vault is empty", "Add your first encrypted item using the form.");
-  $("contacts").innerHTML = state.contacts.map(c => `<li class="item"><div class="main"><div class="title">${esc(c.name)}</div><div class="muted">${esc(c.relationship)} · ${esc(c.contact_method)}</div></div>
-    <div class="actions"><button class="btn secondary small" data-invite="${esc(c.id)}" data-name="${esc(c.name)}" type="button">Create invite</button><button class="btn danger ghost small" data-del-contact="${esc(c.id)}" data-name="${esc(c.name)}" type="button">Remove</button></div></li>`).join("")
+  const keyStatus = (c) => !c.public_key ? `<div class="muted"><span class="pill">No key yet</span> Waiting for them to open their link</div>`
+    : c.key_confirmed ? `<div class="muted"><span class="pill active">Key confirmed</span></div>` : `<div class="muted"><span class="pill pending">Key needs your confirmation</span></div>`;
+  const awaiting = state.contacts.filter(c => c.public_key && !c.key_confirmed).length;
+  $("key-badge").textContent = awaiting; $("key-badge").classList.toggle("hidden", !awaiting);
+  $("contacts").innerHTML = state.contacts.map(c => `<li class="item"><div class="main"><div class="title">${esc(c.name)}</div><div class="muted">${esc(c.relationship)} · ${esc(c.contact_method)}</div>${keyStatus(c)}</div>
+    <div class="actions">${c.public_key && !c.key_confirmed ? `<button class="btn small" data-confirm-key="${esc(c.id)}" type="button">Confirm key</button>` : ""}<button class="btn secondary small" data-invite="${esc(c.id)}" data-name="${esc(c.name)}" type="button">Create invite</button><button class="btn danger ghost small" data-del-contact="${esc(c.id)}" data-name="${esc(c.name)}" type="button">Remove</button></div></li>`).join("")
     || empty("No trusted contacts yet", "Add someone you'd trust in an emergency.");
   const itemName = (id) => (state.items.find(i => i.id === id) || {}).title || "Unknown item";
   const contactName = (id) => (state.contacts.find(c => c.id === id) || {}).name || "A trusted contact";
@@ -432,8 +483,8 @@ function renderAudit(events) {
 }
 function skeleton() { const s = '<li class="skeleton" aria-hidden="true"></li>'.repeat(2); for (const id of ["items", "contacts", "requests"]) $(id).innerHTML = s; }
 async function refresh() {
-  const [items, contacts, requests, grants, audit, me] = await Promise.all([api("/vault/items"), api("/trusted-contacts"), api("/access-requests"), api("/access-grants"), api("/audit-events"), api("/auth/me")]);
-  Object.assign(state, { items, contacts, requests, grants });
+  const [items, contacts, requests, grants, policies, audit, me] = await Promise.all([api("/vault/items"), api("/trusted-contacts"), api("/access-requests"), api("/access-grants"), api("/vault/policies"), api("/audit-events"), api("/auth/me")]);
+  Object.assign(state, { items, contacts, requests, grants, policies });
   $("identity").textContent = me.email; $("identity").title = me.email;
   $("demo-pill").textContent = "Demo"; $("demo-pill").classList.toggle("hidden", !isDemoEmail(me.email));
   render(); renderAudit(audit);
@@ -444,9 +495,9 @@ function signedIn(on) {
   $("auth").classList.toggle("hidden", on); $("dashboard").classList.toggle("hidden", !on); $("who").classList.toggle("hidden", !on);
   $("portal").classList.add("hidden"); $("portal-auth").classList.add("hidden");
 }
-function showDashboard() { signedIn(true); skeleton(); refresh().catch(e => { if (e.message !== "Session expired") toast(e.message, true); }); }
+function showDashboard() { signedIn(true); skeleton(); refresh().then(() => syncShares()).catch(e => { if (e.message !== "Session expired") toast(e.message, true); }); }
 function signOut(msg) {
-  sessionStorage.removeItem("trustedAccessToken"); state.token = null; Object.assign(state, { items: [], contacts: [], requests: [], grants: [] });
+  sessionStorage.removeItem("trustedAccessToken"); state.token = null; Object.assign(state, { items: [], contacts: [], requests: [], grants: [], policies: [] });
   signedIn(false); document.querySelectorAll("form").forEach(f => f.reset()); updateDemoButton(); document.querySelectorAll("dialog[open]").forEach(d => d.close()); if (typeof resetImport === "function") resetImport(); if (msg) toast(msg, true);
 }
 function setupTabs(list) {
@@ -566,7 +617,7 @@ $("contact-form").onsubmit = async (e) => {
 };
 
 /* Actions */
-let policyItem = null, editItem = null, editKeepsText = false;
+let policyItem = null, editItem = null, editKeepsText = false, keyTarget = null;
 document.addEventListener("click", async (e) => {
   const b = e.target.closest("button"); if (!b) return; const d = b.dataset;
   try {
@@ -607,6 +658,9 @@ document.addEventListener("click", async (e) => {
       try { $("grant-body").textContent = await decrypt(g.ciphertext); }
       catch { $("grant-body").textContent = "This item is end-to-end encrypted, and this browser doesn't hold the key. Sharing decryption keys between people isn't built into this prototype yet."; }
       $("grant-dialog").showModal();
+    } else if (d.confirmKey) {
+      keyTarget = state.contacts.find(x => x.id === d.confirmKey);
+      $("key-title").textContent = "Confirm " + keyTarget.name + "'s key"; $("key-fp").textContent = await fingerprint(keyTarget.public_key); $("key-dialog").showModal();
     } else if (d.edit) {
       editItem = state.items.find(i => i.id === d.edit);
       $("e-category").innerHTML = $("v-category").innerHTML; $("e-category").value = editItem.category;
@@ -630,6 +684,19 @@ document.addEventListener("click", async (e) => {
     }
   } catch (x) { if (x.message !== "Session expired") toast(x.message, true); }
 });
+$("key-cancel").onclick = () => $("key-dialog").close();
+$("key-ok").onclick = async (e) => {
+  const c = keyTarget;
+  try {
+    await busy(e.currentTarget, async () => {
+      await api("/trusted-contacts/" + c.id + "/key/confirm", { method: "POST", body: JSON.stringify({ public_key_sha256: await keyHash(c.public_key) }) });
+      $("key-dialog").close(); await refresh();
+      const results = Object.values(await syncShares());
+      const n = results.filter(r => r && r.delivered && r.delivered.length).length;
+      toast("Key confirmed." + (n ? " Delivered to " + plural(n, "shared item", "shared items") + "." : ""));
+    });
+  } catch (x) { if (x.message !== "Session expired") { $("key-dialog").close(); toast(x.message, true); refresh().catch(() => {}); } }
+};
 $("edit-cancel").onclick = () => $("edit-dialog").close();
 $("edit-form").onsubmit = async (e) => {
   e.preventDefault(); const title = $("e-title").value.trim(), text = $("e-text").value, err = $("edit-error");
@@ -637,7 +704,8 @@ $("edit-form").onsubmit = async (e) => {
   if (!editKeepsText && !text.trim()) return void (err.textContent = "The text can't be empty.");
   try {
     await busy(e.submitter, async () => api("/vault/items/" + editItem.id, { method: "PUT", body: JSON.stringify({ category: $("e-category").value, title, ciphertext: text.trim() ? await encrypt(text) : editItem.ciphertext }) }));
-    $("edit-dialog").close(); toast("Item updated."); await refresh();
+    $("edit-dialog").close(); await refresh();
+    const r = (await syncShares({ only: [editItem.id] }))[editItem.id]; toast("Item updated." + shareSummary(r), !!(r && (r.undecryptable || r.failed)));
   } catch (x) { if (x.message === "Session expired") $("edit-dialog").close(); else err.textContent = x.message; }
 };
 $("policy-cancel").onclick = () => $("policy-dialog").close();
@@ -654,7 +722,8 @@ $("policy-form").onsubmit = async (e) => {
   if (!(approvals >= 1) || approvals > ids.length) return void (err.textContent = "Approvals must be between 1 and " + ids.length + ".");
   try {
     await busy(e.submitter, () => api("/vault/items/" + policyItem.id + "/policy", { method: "PUT", body: JSON.stringify({ access_mode: $("p-mode").value, contact_ids: ids, required_approvals: approvals }) }));
-    $("policy-dialog").close(); toast("Sharing rules saved."); await refresh();
+    $("policy-dialog").close(); await refresh();
+    const r = (await syncShares({ only: [policyItem.id] }))[policyItem.id]; toast("Sharing rules saved." + shareSummary(r), !!(r && (r.undecryptable || r.failed)));
   } catch (x) { err.textContent = x.message; }
 };
 $("token-close").onclick = () => { $("token-dialog").close(); $("token-value").textContent = ""; };
