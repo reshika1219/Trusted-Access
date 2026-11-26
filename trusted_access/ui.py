@@ -264,7 +264,7 @@ function ago(s) {
   const d = parseDate(s); if (!d) return "";
   const sec = Math.round((Date.now() - d) / 1000), abs = Math.abs(sec);
   const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
-  for (const [n, u] of [[60,"second"],[60,"minute"],[24,"hour"],[30,"day"],[12,"month"]]) { if (abs < n * (u === "second" ? 1 : 1) && u === "second") return rtf.format(-sec, u); }
+  if (abs < 60) return rtf.format(-sec, "second");
   if (abs < 3600) return rtf.format(-Math.round(sec / 60), "minute");
   if (abs < 86400) return rtf.format(-Math.round(sec / 3600), "hour");
   if (abs < 2592000) return rtf.format(-Math.round(sec / 86400), "day");
