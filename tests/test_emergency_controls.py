@@ -62,12 +62,12 @@ def test_two_of_three_contacts_must_approve(tmp_path) -> None:
 
     first = client.post(
         f"/access-requests/{request_id}/contact-approve",
-        headers={"X-Contact-Token": tokens[0]},
+        headers={"X-Contact-Token": tokens[1]},
     )
     assert first.json()["status"] == "awaiting_more_approvals"
     second = client.post(
         f"/access-requests/{request_id}/contact-approve",
-        headers={"X-Contact-Token": tokens[1]},
+        headers={"X-Contact-Token": tokens[2]},
     )
     assert second.status_code == 200
     assert second.json()["grant_id"]
@@ -119,3 +119,35 @@ def test_owner_lists_only_their_own_grants_with_revocation_state(tmp_path) -> No
     client.post(f"/access-grants/{grant_id}/revoke", headers={"X-Session-Token": owner_token})
     revoked = client.get("/access-grants", headers={"X-Session-Token": owner_token}).json()
     assert revoked[0]["revoked_at"] is not None
+
+
+def test_requester_cannot_approve_their_own_request(tmp_path) -> None:
+    app.state.database_path = tmp_path / "self-approval.sqlite3"
+    client = TestClient(app)
+    owner_token, _, tokens, request_id = setup_case(client, threshold=1)
+
+    own = client.post(
+        f"/access-requests/{request_id}/contact-approve",
+        headers={"X-Contact-Token": tokens[0]},
+    )
+    assert own.status_code == 403
+    assert "own request" in own.json()["detail"]
+    assert client.get("/access-grants", headers={"X-Session-Token": owner_token}).json() == []
+
+
+def test_duplicate_open_requests_are_rejected(tmp_path) -> None:
+    app.state.database_path = tmp_path / "duplicate-request.sqlite3"
+    client = TestClient(app)
+    owner_token, _, tokens, request_id = setup_case(client)
+    item_id = client.get("/access-requests", headers={"X-Session-Token": owner_token}).json()[0]["vault_item_id"]
+
+    duplicate = client.post(
+        "/access-requests", headers={"X-Contact-Token": tokens[0]}, json={"item_id": item_id}
+    )
+    assert duplicate.status_code == 409
+
+    client.post(f"/access-requests/{request_id}/reject", headers={"X-Session-Token": owner_token})
+    again = client.post(
+        "/access-requests", headers={"X-Contact-Token": tokens[0]}, json={"item_id": item_id}
+    )
+    assert again.status_code == 201

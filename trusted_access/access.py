@@ -108,6 +108,8 @@ def register_routes(app) -> None:
             raise HTTPException(status_code=404, detail="Access request not found")
         if request["status"] not in {"pending", "owner_approved"}:
             raise HTTPException(status_code=409, detail="Access request is not awaiting approval")
+        if request["requester_contact_id"] == contact_id:
+            raise HTTPException(status_code=403, detail="Requesters cannot approve their own request")
         allowed = connection.execute(
             """
             SELECT 1 FROM policy_contacts pc

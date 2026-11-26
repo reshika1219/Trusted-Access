@@ -56,6 +56,16 @@ def register_routes(app) -> None:
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=403, detail="Contact is not permitted to request this item")
+        open_request = connection.execute(
+            """
+            SELECT 1 FROM emergency_requests
+            WHERE vault_item_id = ? AND requester_contact_id = ?
+              AND status IN ('pending', 'owner_approved')
+            """,
+            (request.item_id, contact_id),
+        ).fetchone()
+        if open_request is not None:
+            raise HTTPException(status_code=409, detail="You already have an open request for this item")
         request_id = str(uuid4())
         connection.execute(
             """
