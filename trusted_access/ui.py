@@ -281,6 +281,12 @@ INDEX_HTML = r"""<!doctype html>
   <p class="field-hint">At least 12 characters. Store it separately from the backup file.</p>
   <p class="error-text" role="alert" id="export-error"></p>
   <div class="row end"><button class="btn secondary" type="button" id="export-cancel">Cancel</button><button class="btn" type="submit">Encrypt and download</button></div></form></dialog>
+<dialog id="edit-dialog" aria-labelledby="edit-title"><form id="edit-form" novalidate><h3 id="edit-title">Edit item</h3>
+  <label for="e-category">Category</label><select id="e-category"></select>
+  <label for="e-title">Title</label><input id="e-title" maxlength="200">
+  <label for="e-text">Private text</label><textarea id="e-text"></textarea><p class="field-hint" id="e-hint"></p>
+  <p class="error-text" role="alert" id="edit-error"></p>
+  <div class="row end"><button class="btn secondary" type="button" id="edit-cancel">Cancel</button><button class="btn" type="submit">Save changes</button></div></form></dialog>
 <div id="toasts" aria-live="polite" aria-atomic="false"></div>
 
 <script>
@@ -292,7 +298,8 @@ const LABELS = {
   access_approved: "Access request approved", access_rejected: "Access request rejected", access_revoked: "Access revoked",
   backup_exported: "Backup exported", access_requested: "Access requested", trusted_contact_invited: "Contact invite created",
   access_owner_approved: "Owner approved, awaiting contacts", access_granted: "Access granted", access_viewed: "Shared item viewed",
-  backup_import_requested: "Backup import requested",
+  backup_import_requested: "Backup import requested", vault_item_updated: "Vault item edited", vault_item_deleted: "Vault item deleted",
+  trusted_contact_deleted: "Trusted contact removed",
 };
 const label = (t) => LABELS[t] || String(t).replace(/_/g, " ").replace(/^./, c => c.toUpperCase());
 function parseDate(s) { if (!s) return null; let v = String(s).replace(" ", "T"); if (!/[zZ]|[+-]\d\d:?\d\d$/.test(v)) v += "Z"; const d = new Date(v); return isNaN(d) ? null : d; }
@@ -369,10 +376,10 @@ function render() {
     `<div class="stat ${pending.length ? "alert" : ""}"><b>${pending.length}</b><span>Pending requests</span></div>`;
   const badge = $("req-badge"); badge.textContent = pending.length; badge.classList.toggle("hidden", !pending.length);
   $("items").innerHTML = state.items.map(i => `<li class="item"><div class="main"><div class="title">${esc(i.title)}</div><div class="muted"><span class="pill">${esc(i.category)}</span> · ${when(i.created_at)}</div></div>
-    <div class="actions"><button class="btn secondary small" data-reveal="${esc(i.id)}" type="button">View</button><button class="btn secondary small" data-policy="${esc(i.id)}" type="button">Sharing</button></div><div class="revealed hidden" id="rev-${esc(i.id)}" tabindex="-1"></div></li>`).join("")
+    <div class="actions"><button class="btn secondary small" data-reveal="${esc(i.id)}" type="button">View</button><button class="btn secondary small" data-policy="${esc(i.id)}" type="button">Sharing</button><button class="btn secondary small" data-edit="${esc(i.id)}" type="button">Edit</button><button class="btn danger ghost small" data-del-item="${esc(i.id)}" type="button">Delete</button></div><div class="revealed hidden" id="rev-${esc(i.id)}" tabindex="-1"></div></li>`).join("")
     || empty("Your vault is empty", "Add your first encrypted item using the form.");
   $("contacts").innerHTML = state.contacts.map(c => `<li class="item"><div class="main"><div class="title">${esc(c.name)}</div><div class="muted">${esc(c.relationship)} · ${esc(c.contact_method)}</div></div>
-    <div class="actions"><button class="btn secondary small" data-invite="${esc(c.id)}" data-name="${esc(c.name)}" type="button">Create invite</button></div></li>`).join("")
+    <div class="actions"><button class="btn secondary small" data-invite="${esc(c.id)}" data-name="${esc(c.name)}" type="button">Create invite</button><button class="btn danger ghost small" data-del-contact="${esc(c.id)}" data-name="${esc(c.name)}" type="button">Remove</button></div></li>`).join("")
     || empty("No trusted contacts yet", "Add someone you'd trust in an emergency.");
   const itemName = (id) => (state.items.find(i => i.id === id) || {}).title || "Unknown item";
   const contactName = (id) => (state.contacts.find(c => c.id === id) || {}).name || "A trusted contact";
@@ -502,7 +509,11 @@ $("demo").onclick = (e) => busy(e.currentTarget, async () => {
   } catch (x) { if (x.message !== "Session expired") toast(x.message, true); }
 });
 updateDemoButton();
-$("logout").onclick = () => signOut();
+$("logout").onclick = async (e) => {
+  // End the session on the server too, so a copied token stops working. Sign out locally even if that fails.
+  await busy(e.currentTarget, () => api("/auth/logout", { method: "POST" }).catch(() => {}));
+  signOut();
+};
 $("reload").onclick = (e) => busy(e.currentTarget, () => refresh().then(() => toast("Up to date.")).catch(x => toast(x.message, true)));
 
 $("vault-form").onsubmit = async (e) => {
@@ -522,7 +533,7 @@ $("contact-form").onsubmit = async (e) => {
 };
 
 /* Actions */
-let policyItem = null;
+let policyItem = null, editItem = null, editKeepsText = false;
 document.addEventListener("click", async (e) => {
   const b = e.target.closest("button"); if (!b) return; const d = b.dataset;
   try {
@@ -544,6 +555,20 @@ document.addEventListener("click", async (e) => {
     } else if (d.approve) {
       if (!await confirmDialog("Approve this request?", "The contact will be able to see the item you shared. You can revoke access later.", "Approve")) return;
       await busy(b, () => api("/access-requests/" + d.approve + "/approve", { method: "POST" })); toast("Request approved."); await refresh();
+    } else if (d.edit) {
+      editItem = state.items.find(i => i.id === d.edit);
+      $("e-category").innerHTML = $("v-category").innerHTML; $("e-category").value = editItem.category;
+      $("e-title").value = editItem.title; $("edit-error").textContent = "";
+      try { $("e-text").value = await decrypt(editItem.ciphertext); editKeepsText = false; $("e-hint").textContent = ""; }
+      catch { $("e-text").value = ""; editKeepsText = true; $("e-hint").textContent = "This item can't be decrypted in this browser, so its text can't be shown. Leave the text blank to keep it unchanged."; }
+      $("edit-dialog").showModal(); $("e-title").focus();
+    } else if (d.delItem) {
+      const item = state.items.find(i => i.id === d.delItem);
+      if (!await confirmDialog("Delete this item?", "“" + item.title + "” will be permanently deleted, and any access contacts have to it ends immediately.", "Delete", true)) return;
+      await busy(b, () => api("/vault/items/" + d.delItem, { method: "DELETE" })); toast("Item deleted."); await refresh();
+    } else if (d.delContact) {
+      if (!await confirmDialog("Remove " + d.name + "?", "Their invite stops working and any access they have ends immediately. Their past activity stays in your log.", "Remove contact", true)) return;
+      await busy(b, () => api("/trusted-contacts/" + d.delContact, { method: "DELETE" })); toast("Contact removed."); await refresh();
     } else if (d.revoke) {
       if (!await confirmDialog("Revoke access?", d.name + " will immediately lose access to “" + d.item + "”. This can't be undone, but they can request access again.", "Revoke access", true)) return;
       await busy(b, () => api("/access-grants/" + d.revoke + "/revoke", { method: "POST" })); toast("Access revoked."); await refresh();
@@ -553,6 +578,16 @@ document.addEventListener("click", async (e) => {
     }
   } catch (x) { if (x.message !== "Session expired") toast(x.message, true); }
 });
+$("edit-cancel").onclick = () => $("edit-dialog").close();
+$("edit-form").onsubmit = async (e) => {
+  e.preventDefault(); const title = $("e-title").value.trim(), text = $("e-text").value, err = $("edit-error");
+  if (!title) return void (err.textContent = "Add a title.");
+  if (!editKeepsText && !text.trim()) return void (err.textContent = "The text can't be empty.");
+  try {
+    await busy(e.submitter, async () => api("/vault/items/" + editItem.id, { method: "PUT", body: JSON.stringify({ category: $("e-category").value, title, ciphertext: text.trim() ? await encrypt(text) : editItem.ciphertext }) }));
+    $("edit-dialog").close(); toast("Item updated."); await refresh();
+  } catch (x) { if (x.message === "Session expired") $("edit-dialog").close(); else err.textContent = x.message; }
+};
 $("policy-cancel").onclick = () => $("policy-dialog").close();
 $("policy-form").onsubmit = async (e) => {
   e.preventDefault(); const ids = [...e.target.querySelectorAll("[name=contact]:checked")].map(c => c.value);

@@ -78,3 +78,12 @@ def test_dashboard_encrypts_the_whole_backup_client_side(tmp_path) -> None:
     # The old plaintext download and preview must be gone.
     assert 'id="preview"' not in html
     assert "JSON.stringify(backupData" not in html
+
+
+def test_dashboard_supports_editing_deleting_and_server_logout(tmp_path) -> None:
+    app.state.database_path = tmp_path / "ui.sqlite3"
+    html = TestClient(app).get("/").text
+
+    assert 'id="edit-dialog"' in html
+    assert "data-del-item" in html and "data-del-contact" in html
+    assert 'api("/auth/logout"' in html
