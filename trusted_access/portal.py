@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 from sqlite3 import Connection
+from typing import Optional
 
-from fastapi import Depends
+from fastapi import Depends, Header
 
 from trusted_access.auth import utc_now
 from trusted_access.main import database
@@ -101,3 +103,17 @@ def register_routes(app) -> None:
                 request["grant_id"] and not request["grant_revoked_at"] and not expired
             )
         return {"mine": mine, "to_approve": to_approve}
+
+    @app.post("/contact/logout", tags=["contact portal"])
+    def contact_logout(
+        x_contact_token: Optional[str] = Header(default=None),
+        connection: Connection = Depends(database),
+    ) -> dict[str, str]:
+        """End a contact session; the owner can issue a new invite at any time."""
+        if x_contact_token:
+            connection.execute(
+                "DELETE FROM contact_sessions WHERE token_hash = ?",
+                (hashlib.sha256(x_contact_token.encode("utf-8")).hexdigest(),),
+            )
+            connection.commit()
+        return {"status": "signed_out"}

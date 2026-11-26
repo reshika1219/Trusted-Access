@@ -103,3 +103,18 @@ def test_active_grant_is_reported_and_revocation_is_reflected(tmp_path) -> None:
     client.post(f"/access-grants/{grant_id}/revoke", headers=owner)
     revoked = client.get("/contact/requests", headers=tokens[0]).json()["mine"][0]
     assert revoked["grant_active"] is False and revoked["grant_revoked_at"]
+
+
+def test_contact_logout_ends_only_that_session(tmp_path) -> None:
+    app.state.database_path = tmp_path / "portal-logout.sqlite3"
+    client = TestClient(app)
+    owner, contacts, tokens, _, _ = build(client)
+    second = {"X-Contact-Token": client.post(
+        f"/trusted-contacts/{contacts[0]}/invite", headers=owner
+    ).json()["contact_token"]}
+
+    assert client.post("/contact/logout", headers=tokens[0]).status_code == 200
+    assert client.get("/contact/me", headers=tokens[0]).status_code == 401
+    assert client.get("/contact/me", headers=second).status_code == 200
+    assert client.get("/contact/me", headers=tokens[1]).status_code == 200
+    assert client.post("/contact/logout").status_code == 200
