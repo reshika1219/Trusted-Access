@@ -151,3 +151,19 @@ def test_dashboard_delivers_keys_with_fingerprint_confirmation(tmp_path) -> None
     assert 'generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt"])' in html
     # Delivery only to contacts the owner confirmed.
     assert "c.key_confirmed" in html
+
+
+def test_contact_portal_generates_a_non_extractable_key_and_opens_via_delivered_key(tmp_path) -> None:
+    app.state.database_path = tmp_path / "ui.sqlite3"
+    html = TestClient(app).get("/").text
+
+    assert "Your encryption key" in html
+    assert "async function newContactKey" in html
+    # The contact's private key is generated non-extractable and kept in IndexedDB.
+    assert 'generateKey(RSA_PARAMS, false, ["wrapKey", "unwrapKey"])' in html
+    assert "unwrapKey" in html and "openGrant" in html
+    # Contacts never fall back to the owner's master key to read an item.
+    assert "decrypt(g.ciphertext)" not in html
+    # Boolean-style data attributes are falsy in dataset checks, so they need a value.
+    assert 'data-setup-key="1"' in html
+    assert "ends this invite link" in html

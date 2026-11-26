@@ -284,6 +284,7 @@ INDEX_HTML = r"""<!doctype html>
   </section>
 
   <section id="portal" class="hidden" aria-label="Trusted contact portal">
+    <div class="card" id="p-key-card"><div class="card-head"><div><h3>Your encryption key</h3><p class="muted">It lives only in this browser. The server never sees it.</p></div></div><div id="p-key"></div></div>
     <div class="card" id="p-approve-card"><div class="card-head"><div><h3>Waiting for your approval</h3><p class="muted">Only approve if you're sure this person should see the item.</p></div></div><ul class="list" id="p-approve"></ul></div>
     <div class="card"><div class="card-head"><div><h3>Shared with you</h3><p class="muted">Asking for access never opens anything by itself. It needs approval first.</p></div></div><ul class="list" id="p-items"></ul></div>
     <div class="card"><div class="card-head"><h3>Your requests</h3><button class="btn secondary small" id="p-reload" type="button">Refresh</button></div><ul class="list" id="p-mine"></ul></div>
@@ -593,7 +594,10 @@ $("demo").onclick = (e) => busy(e.currentTarget, async () => {
 });
 updateDemoButton();
 $("logout").onclick = async (e) => {
-  if (state.contactToken) { await busy(e.currentTarget, () => api("/contact/logout", { method: "POST", contact: true }).catch(() => {})); return portalSignOut(); }
+  if (state.contactToken) {
+    if (!await confirmDialog("Sign out?", "Signing out ends this invite link. To come back, ask the owner for a new one. Your encryption key stays in this browser.", "Sign out")) return;
+    await busy(e.currentTarget, () => api("/contact/logout", { method: "POST", contact: true }).catch(() => {})); return portalSignOut();
+  }
   // End the session on the server too, so a copied token stops working. Sign out locally even if that fails.
   await busy(e.currentTarget, () => api("/auth/logout", { method: "POST" }).catch(() => {}));
   signOut();
@@ -645,6 +649,11 @@ document.addEventListener("click", async (e) => {
     } else if (d.approve) {
       if (!await confirmDialog("Approve this request?", "The contact will be able to see the item you shared. You can revoke access later.", "Approve")) return;
       await busy(b, () => api("/access-requests/" + d.approve + "/approve", { method: "POST" })); toast("Request approved."); await refresh();
+    } else if (d.setupKey) {
+      if (!await confirmDialog("Use this browser?", "This creates a new key and replaces the old one. The owner must confirm the new key before you can open shared items, and your other browser will stop working for them.", "Create new key")) return;
+      pstate.keyState = "generating"; renderKeyCard();
+      const rec = await newContactKey(pstate.me.id);
+      await api("/contact/key", { method: "PUT", contact: true, body: JSON.stringify({ public_key: rec.spki }) }); await refreshPortal();
     } else if (d.request) {
       await busy(b, () => api("/access-requests", { method: "POST", contact: true, body: JSON.stringify({ item_id: d.request }) }));
       toast("Request sent. The owner or other trusted contacts must approve it."); await refreshPortal();
@@ -655,8 +664,7 @@ document.addEventListener("click", async (e) => {
     } else if (d.gview) {
       const g = await busy(b, () => api("/access-grants/" + d.gview, { contact: true }));
       $("grant-title").textContent = g.title; $("grant-meta").textContent = g.category + " · access ends " + (parseDate(g.expires_at) ? parseDate(g.expires_at).toLocaleString() : "soon");
-      try { $("grant-body").textContent = await decrypt(g.ciphertext); }
-      catch { $("grant-body").textContent = "This item is end-to-end encrypted, and this browser doesn't hold the key. Sharing decryption keys between people isn't built into this prototype yet."; }
+      $("grant-body").textContent = await openGrant(g);
       $("grant-dialog").showModal();
     } else if (d.confirmKey) {
       keyTarget = state.contacts.find(x => x.id === d.confirmKey);
@@ -735,8 +743,17 @@ $("token-copy").onclick = async (e) => {
     toast("Couldn't copy automatically. The token is selected: press Ctrl/Cmd+C.", true);
   }
 };
+async function openGrant(g) {
+  if (!g.wrapped_key || !g.share_ciphertext) return "The owner hasn't delivered a key for this item to you yet. This usually means they haven't confirmed your key. Ask them to open the Trusted contacts tab and confirm it.";
+  const rec = pstate.me ? await idbGet(pstate.me.id) : null;
+  if (!rec) return "This browser doesn't hold your key. Use the browser where you set it up, or create a new key here and ask the owner to confirm it.";
+  try {
+    const shareKey = await crypto.subtle.unwrapKey("raw", unb64(g.wrapped_key), rec.privateKey, { name: "RSA-OAEP" }, { name: "AES-GCM" }, false, ["decrypt"]);
+    return await decryptWith(shareKey, g.share_ciphertext);
+  } catch { return "Couldn't open this item. The key delivered to you doesn't match the key in this browser. Ask the owner to confirm your current key."; }
+}
 /* Trusted contact portal: read-only metadata plus the request/approve/view workflow. */
-const pstate = { me: null, items: [], mine: [], toApprove: [] };
+const pstate = { me: null, items: [], mine: [], toApprove: [], keyState: null, fp: "", rec: null, keyError: "" };
 let pollTimer = null;
 const PSTATUS = { pending: "pending", owner_approved: "owner approved", rejected: "rejected", active: "access active", revoked: "revoked", expired: "expired" };
 const reqState = (r) => r.grant_active ? "active" : r.grant_revoked_at ? "revoked" : r.grant_id ? "expired" : r.status;
@@ -762,19 +779,56 @@ async function refreshPortal() {
   Object.assign(pstate, { me, items, mine: reqs.mine, toApprove: reqs.to_approve });
   $("identity").textContent = me.name + " (" + me.relationship + ")"; $("identity").title = me.name;
   $("demo-pill").textContent = "Contact"; $("demo-pill").classList.remove("hidden");
-  renderPortal();
+  renderPortal(); renderKeyCard();
+  await updateContactKey(me);
+}
+/* The contact's private key is non-extractable and lives in IndexedDB; only the public key is sent to the server. */
+const idb = () => new Promise((res, rej) => { const r = indexedDB.open("trustedAccessKeys", 1); r.onupgradeneeded = () => r.result.createObjectStore("contactKeys"); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+const idbGet = async (k) => { const db = await idb(); return new Promise((res, rej) => { const q = db.transaction("contactKeys").objectStore("contactKeys").get(k); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); };
+const idbPut = async (k, v) => { const db = await idb(); return new Promise((res, rej) => { const t = db.transaction("contactKeys", "readwrite"); t.objectStore("contactKeys").put(v, k); t.oncomplete = () => res(); t.onerror = () => rej(t.error); }); };
+async function newContactKey(id) {
+  const kp = await crypto.subtle.generateKey(RSA_PARAMS, false, ["wrapKey", "unwrapKey"]);
+  const rec = { privateKey: kp.privateKey, spki: b64(new Uint8Array(await crypto.subtle.exportKey("spki", kp.publicKey))) };
+  await idbPut(id, rec); return rec;
+}
+let keyBusy = false;
+async function updateContactKey(me) {
+  if (keyBusy) return; keyBusy = true;
+  try {
+    let rec = await idbGet(me.id);
+    if (!me.public_key) {
+      if (!rec) { pstate.keyState = "generating"; renderKeyCard(); rec = await newContactKey(me.id); }
+      await api("/contact/key", { method: "PUT", contact: true, body: JSON.stringify({ public_key: rec.spki }) });
+      me = pstate.me = { ...me, public_key: rec.spki, key_confirmed: false };
+    }
+    pstate.rec = rec || null;
+    if (rec && me.public_key === rec.spki) { pstate.keyState = "ok"; pstate.fp = await fingerprint(rec.spki); }
+    else { pstate.keyState = "other"; pstate.fp = ""; }
+  } catch (x) { if (x.message !== "Session expired") { pstate.keyState = "error"; pstate.keyError = x.message; } }
+  finally { keyBusy = false; renderKeyCard(); }
+}
+function renderKeyCard() {
+  const me = pstate.me; if (!me) return;
+  const fp = pstate.fp ? `<pre class="fp">${esc(pstate.fp)}</pre>` : "";
+  $("p-key").innerHTML = pstate.keyState === "generating" ? `<p class="muted">Setting up your encryption key. This takes a few seconds.</p><div class="skeleton" aria-hidden="true"></div>`
+    : pstate.keyState === "ok" ? (me.key_confirmed
+      ? `<p><span class="pill active">Confirmed by the owner</span></p><p class="muted">You can open items shared with you in this browser once access is approved.</p>${fp}`
+      : `<p><span class="pill pending">Waiting for the owner to confirm</span></p><p class="muted">Read this fingerprint to the owner, in person or on a call, so they can check it's really you. Until they confirm, you can't open shared items.</p>${fp}`)
+    : pstate.keyState === "other" ? `<p><span class="pill pending">Your key is in another browser</span></p><p class="muted">Items open only where your key lives. To use this browser instead, create a new key here. The owner will need to confirm it again.</p><button class="btn small" data-setup-key="1" type="button">Use this browser</button>`
+    : pstate.keyState === "error" ? `<p class="error-text">${esc(pstate.keyError)}</p>`
+    : `<div class="skeleton" aria-hidden="true"></div>`;
 }
 function showPortal() {
   for (const id of ["auth", "dashboard", "portal-auth"]) $(id).classList.add("hidden");
   $("portal").classList.remove("hidden"); $("who").classList.remove("hidden");
-  for (const id of ["p-items", "p-mine"]) $(id).innerHTML = '<li class="skeleton" aria-hidden="true"></li>'.repeat(2);
+  for (const id of ["p-items", "p-mine", "p-key"]) $(id).innerHTML = '<li class="skeleton" aria-hidden="true"></li>'.repeat(2);
   $("p-approve-card").classList.add("hidden");
   refreshPortal().catch(e => { if (e.message !== "Session expired") toast(e.message, true); });
   clearInterval(pollTimer); pollTimer = setInterval(() => { if (!document.hidden && state.contactToken) refreshPortal().catch(() => {}); }, 20000);
 }
 function portalSignOut(msg) {
   sessionStorage.removeItem(CONTACT_KEY); state.contactToken = null; clearInterval(pollTimer);
-  Object.assign(pstate, { me: null, items: [], mine: [], toApprove: [] }); signOut(msg);
+  Object.assign(pstate, { me: null, items: [], mine: [], toApprove: [], keyState: null, fp: "", rec: null, keyError: "" }); signOut(msg);
 }
 async function startPortal(token) {
   if (state.token) throw new Error("Sign out of your owner account first.");
