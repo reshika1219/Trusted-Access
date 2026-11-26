@@ -298,7 +298,7 @@ INDEX_HTML = r"""<!doctype html>
   <label id="p-contacts-label">Trusted contacts</label><div class="checks" id="p-contact-list" role="group" aria-labelledby="p-contacts-label"></div>
   <label for="p-approvals">Approvals required</label><input id="p-approvals" name="required_approvals" type="number" min="1" value="1"><p class="field-hint">Cannot exceed the number of selected contacts.</p>
   <p class="error-text" role="alert" id="policy-error"></p>
-  <div class="row end"><button class="btn secondary" type="button" id="policy-cancel">Cancel</button><button class="btn" type="submit">Save rules</button></div></form></dialog>
+  <div class="row end"><button class="btn danger ghost hidden" type="button" id="policy-stop" style="margin-right:auto">Stop sharing</button><button class="btn secondary" type="button" id="policy-cancel">Cancel</button><button class="btn" type="submit">Save rules</button></div></form></dialog>
 <dialog id="export-dialog" aria-labelledby="export-title"><form id="export-form" novalidate><h3 id="export-title">Protect your backup</h3>
   <p class="muted">Your backup is encrypted in this browser with a passphrase you choose. Without it, the file can't be opened, and nobody can recover it for you.</p>
   <label for="ex-pass">Backup passphrase</label><input id="ex-pass" type="password" autocomplete="new-password">
@@ -326,7 +326,7 @@ const LABELS = {
   backup_exported: "Backup exported", access_requested: "Access requested", trusted_contact_invited: "Contact invite created",
   access_owner_approved: "Owner approved, awaiting contacts", access_granted: "Access granted", access_viewed: "Shared item viewed",
   backup_import_requested: "Backup import requested", vault_item_updated: "Vault item edited", vault_item_deleted: "Vault item deleted",
-  trusted_contact_deleted: "Trusted contact removed",
+  trusted_contact_deleted: "Trusted contact removed", access_policy_removed: "Sharing stopped",
 };
 const label = (t) => LABELS[t] || String(t).replace(/_/g, " ").replace(/^./, c => c.toUpperCase());
 function parseDate(s) { if (!s) return null; let v = String(s).replace(" ", "T"); if (!/[zZ]|[+-]\d\d:?\d\d$/.test(v)) v += "Z"; const d = new Date(v); return isNaN(d) ? null : d; }
@@ -581,7 +581,13 @@ document.addEventListener("click", async (e) => {
       policyItem = state.items.find(i => i.id === d.policy);
       $("policy-item").textContent = "For “" + policyItem.title + "”"; $("policy-error").textContent = "";
       $("p-contact-list").innerHTML = state.contacts.map(c => `<label><input type="checkbox" name="contact" value="${esc(c.id)}"> ${esc(c.name)} <span class="muted">(${esc(c.relationship)})</span></label>`).join("");
-      $("p-approvals").max = state.contacts.length; $("p-approvals").value = 1; $("policy-dialog").showModal();
+      $("p-approvals").max = state.contacts.length; $("p-approvals").value = 1; $("p-mode").value = "specific_contacts";
+      const current = (await busy(b, () => api("/vault/items/" + d.policy + "/policy"))).policy;
+      if (current) {
+        $("p-mode").value = current.access_mode; $("p-approvals").value = current.required_approvals;
+        document.querySelectorAll("#p-contact-list input").forEach(c => c.checked = current.contact_ids.includes(c.value));
+      }
+      $("policy-stop").classList.toggle("hidden", !current); $("policy-dialog").showModal();
     } else if (d.invite) {
       const r = await busy(b, () => api("/trusted-contacts/" + d.invite + "/invite", { method: "POST" }));
       $("token-title").textContent = "Invite for " + d.name; $("token-value").textContent = r.contact_token; $("token-dialog").showModal();
@@ -635,6 +641,12 @@ $("edit-form").onsubmit = async (e) => {
   } catch (x) { if (x.message === "Session expired") $("edit-dialog").close(); else err.textContent = x.message; }
 };
 $("policy-cancel").onclick = () => $("policy-dialog").close();
+$("policy-stop").onclick = async (e) => {
+  const item = policyItem; $("policy-dialog").close();
+  if (!await confirmDialog("Stop sharing this item?", "“" + item.title + "” becomes private again. Open requests are rejected and any access contacts have right now ends immediately.", "Stop sharing", true)) return;
+  try { await api("/vault/items/" + item.id + "/policy", { method: "DELETE" }); toast("Sharing stopped. The item is private."); await refresh(); }
+  catch (x) { if (x.message !== "Session expired") toast(x.message, true); }
+};
 $("policy-form").onsubmit = async (e) => {
   e.preventDefault(); const ids = [...e.target.querySelectorAll("[name=contact]:checked")].map(c => c.value);
   const approvals = Number($("p-approvals").value), err = $("policy-error");

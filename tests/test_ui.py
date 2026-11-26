@@ -129,3 +129,12 @@ def test_api_responses_are_not_cacheable(tmp_path) -> None:
 
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["x-content-type-options"] == "nosniff"
+
+
+def test_sharing_dialog_prefills_rules_and_can_stop_sharing(tmp_path) -> None:
+    app.state.database_path = tmp_path / "ui.sqlite3"
+    html = TestClient(app).get("/").text
+
+    assert 'id="policy-stop"' in html and "Stop sharing" in html
+    assert '"/policy")).policy' in html
+    assert "access_policy_removed" in html
