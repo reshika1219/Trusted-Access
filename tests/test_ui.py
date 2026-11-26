@@ -136,5 +136,5 @@ def test_sharing_dialog_prefills_rules_and_can_stop_sharing(tmp_path) -> None:
     html = TestClient(app).get("/").text
 
     assert 'id="policy-stop"' in html and "Stop sharing" in html
-    assert '"/policy")).policy' in html
+    assert '"/policy"))).policy' in html
     assert "access_policy_removed" in html
