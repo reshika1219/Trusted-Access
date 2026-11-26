@@ -29,6 +29,16 @@ app.state.database_path = Path(
 )
 
 
+@app.middleware("http")
+async def security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    # API responses can contain private data; never let a cache keep them.
+    response.headers.setdefault("Cache-Control", "no-store")
+    return response
+
+
 def database():
     app.state.database_path.parent.mkdir(parents=True, exist_ok=True)
     connection = connect(app.state.database_path)

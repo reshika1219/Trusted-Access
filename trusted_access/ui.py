@@ -1,3 +1,7 @@
+import base64
+import hashlib
+import re
+
 from fastapi.responses import HTMLResponse
 
 
@@ -868,6 +872,28 @@ $("import-go").onclick = async (e) => {
 </html>"""
 
 
+def _inline_script_hash(html: str) -> str:
+    """CSP source for the page's single inline script, so nothing else can run."""
+    scripts = re.findall(r"<script>(.*?)</script>", html, flags=re.S)
+    assert len(scripts) == 1, "the page must contain exactly one inline script"
+    digest = hashlib.sha256(scripts[0].encode("utf-8")).digest()
+    return "'sha256-" + base64.b64encode(digest).decode("ascii") + "'"
+
+
+CONTENT_SECURITY_POLICY = "; ".join(
+    [
+        "default-src 'none'",
+        f"script-src {_inline_script_hash(INDEX_HTML)}",
+        "style-src 'unsafe-inline'",
+        "img-src data:",
+        "connect-src 'self'",
+        "base-uri 'none'",
+        "form-action 'self'",
+        "frame-ancestors 'none'",
+    ]
+)
+
+
 def register_ui(app) -> None:
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     def home() -> HTMLResponse:
@@ -877,5 +903,8 @@ def register_ui(app) -> None:
                 "X-Content-Type-Options": "nosniff",
                 "Referrer-Policy": "no-referrer",
                 "X-Frame-Options": "DENY",
+                "Content-Security-Policy": CONTENT_SECURITY_POLICY,
+                "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+                "Cache-Control": "no-store",
             },
         )

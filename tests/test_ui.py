@@ -100,3 +100,32 @@ def test_dashboard_includes_the_trusted_contact_portal(tmp_path) -> None:
     assert "#contact=" in html
     # Viewing a grant must not create an encryption key as a side effect.
     assert "encryptionKey(false)" in html
+
+
+def test_csp_allows_only_the_pages_own_script_by_hash(tmp_path) -> None:
+    import base64
+    import hashlib
+    import re
+
+    app.state.database_path = tmp_path / "ui.sqlite3"
+    response = TestClient(app).get("/")
+    csp = response.headers["content-security-policy"]
+
+    script = re.findall(r"<script>(.*?)</script>", response.text, flags=re.S)
+    assert len(script) == 1
+    digest = base64.b64encode(hashlib.sha256(script[0].encode()).digest()).decode()
+    assert f"script-src 'sha256-{digest}'" in csp
+    assert "default-src 'none'" in csp
+    assert "frame-ancestors 'none'" in csp
+    assert "connect-src 'self'" in csp
+    assert "script-src 'unsafe-inline'" not in csp and "unsafe-eval" not in csp
+    assert "camera=()" in response.headers["permissions-policy"]
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_api_responses_are_not_cacheable(tmp_path) -> None:
+    app.state.database_path = tmp_path / "ui.sqlite3"
+    response = TestClient(app).get("/health")
+
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
