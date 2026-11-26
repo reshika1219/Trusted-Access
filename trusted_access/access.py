@@ -172,6 +172,24 @@ def register_routes(app) -> None:
         connection.commit()
         return {"request_id": request_id, "status": "rejected"}
 
+    @app.get("/access-grants", tags=["access"])
+    def list_access_grants(
+        auth: tuple[str, Connection] = Depends(owner_context),
+    ) -> list[dict[str, Optional[str]]]:
+        owner_id, connection = auth
+        rows = connection.execute(
+            """
+            SELECT g.id, g.request_id, g.vault_item_id, g.recipient_contact_id,
+                   g.expires_at, g.revoked_at, g.created_at
+            FROM access_grants g
+            JOIN vault_items v ON v.id = g.vault_item_id
+            WHERE v.owner_id = ?
+            ORDER BY g.created_at DESC
+            """,
+            (owner_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     @app.post("/access-grants/{grant_id}/revoke", tags=["access"])
     def revoke_grant(
         grant_id: str,

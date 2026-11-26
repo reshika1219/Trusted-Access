@@ -94,3 +94,28 @@ def test_owner_can_revoke_grant_and_audit_is_visible(tmp_path) -> None:
         "/audit-events", headers={"X-Session-Token": owner_token}
     ).json()
     assert any(event["event_type"] == "access_revoked" for event in events)
+
+
+def test_owner_lists_only_their_own_grants_with_revocation_state(tmp_path) -> None:
+    app.state.database_path = tmp_path / "grant-list.sqlite3"
+    client = TestClient(app)
+    owner_token, _, _, request_id = setup_case(client)
+    grant_id = client.post(
+        f"/access-requests/{request_id}/approve",
+        headers={"X-Session-Token": owner_token},
+    ).json()["grant_id"]
+    other_token = client.post(
+        "/auth/register",
+        json={"email": "other@example.com", "password": "correct horse battery"},
+    ).json()["session_token"]
+
+    listed = client.get("/access-grants", headers={"X-Session-Token": owner_token}).json()
+    assert [grant["id"] for grant in listed] == [grant_id]
+    assert listed[0]["request_id"] == request_id
+    assert listed[0]["revoked_at"] is None
+    assert client.get("/access-grants", headers={"X-Session-Token": other_token}).json() == []
+    assert client.get("/access-grants").status_code == 401
+
+    client.post(f"/access-grants/{grant_id}/revoke", headers={"X-Session-Token": owner_token})
+    revoked = client.get("/access-grants", headers={"X-Session-Token": owner_token}).json()
+    assert revoked[0]["revoked_at"] is not None
